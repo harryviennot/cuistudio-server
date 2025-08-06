@@ -1,0 +1,13 @@
+*/__pycache__
+*.pyc
+
+downloads/
+frames/
+videos/
+
+.env
+.env.example
+
+prd.txt
+
+venv/
