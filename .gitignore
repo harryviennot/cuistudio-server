@@ -1,13 +1,45 @@
-*/__pycache__
-*.pyc
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
 
+# Environment variables
+.env
+.env.local
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
 downloads/
 frames/
-videos/
+temp/
+*.tmp
 
-.env
-.env.example
-
-prd.txt
-
-venv/
+# Distribution
+dist/
+build/
+*.egg-info/
