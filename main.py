@@ -5,6 +5,8 @@ from datetime import datetime
 
 from app.extraction.pipeline import run_extraction_pipeline
 from app.database import get_supabase_client
+from app.routers import auth
+
 app = FastAPI(
     title="Recipe Extractor API",
     description="Backend service for processing and storing recipes from various sources",
@@ -22,6 +24,9 @@ app.add_middleware(
 
 # Security
 security = HTTPBearer()
+
+# Include routers
+app.include_router(auth.router)
 
 @app.get("/")
 async def root():

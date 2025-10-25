@@ -32,7 +32,8 @@ async def test_recipe_service():
     try:
         from app.database import get_supabase_client
         from app.services.recipe_service import RecipeService
-        from app.models import RecipeCreate, SourceType
+        from app.models.recipe import RecipeCreate
+        from app.models.common import SourceType
         
         supabase = get_supabase_client()
         recipe_service = RecipeService(supabase)
