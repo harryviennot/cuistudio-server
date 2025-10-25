@@ -5,6 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: ${BUILD_TARGET:-development}
     container_name: cuistudio-server
     ports:
       - "8000:8000"
@@ -14,15 +15,21 @@ services:
       - SUPABASE_PUBLISHABLE_KEY=${SUPABASE_PUBLISHABLE_KEY}
       - SUPABASE_SECRET_KEY=${SUPABASE_SECRET_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_ORGANIZATION_ID=${OPENAI_ORGANIZATION_ID}
+      - OPENAI_PROJECT_ID=${OPENAI_PROJECT_ID}
       - HOST=${HOST:-0.0.0.0}
       - PORT=${PORT:-8000}
-      - DEBUG=${DEBUG:-false}
+      - DEBUG=${DEBUG:-true}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - APP_ENV=${APP_ENV:-development}
     env_file:
       - .env
     volumes:
       # Mount temp directory for file processing
       - ./tmp:/tmp/recipe-app
+      # Mount source code for hot-reload (development only)
+      - ./app:/app/app:ro
+      - ./main.py:/app/main.py:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
@@ -30,6 +37,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
 # Optional: Add a volume for persistent data
 volumes:

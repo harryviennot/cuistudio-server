@@ -48,6 +48,7 @@ async def get_current_user(
         return {
             "id": user.id,
             "email": user.email,
+            "phone": user.phone,
             "created_at": user.created_at,
             "user_metadata": user.user_metadata or {}
         }

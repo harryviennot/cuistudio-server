@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:8081"
 
+    # OAuth & Auth Redirects
+    OAUTH_REDIRECT_URL: str = "http://localhost:3000/auth/callback"
+    SITE_URL: str = "http://localhost:3000"
+
     # Server
     HOST: str = "0.0.0.0"
     PORT: int = 8000
