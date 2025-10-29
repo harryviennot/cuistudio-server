@@ -28,6 +28,7 @@ python-dotenv>=1.0.1
 
 # Image processing
 Pillow>=10.4.0
+pillow-heif>=0.13.0  # For HEIC/HEIF support
 pytesseract>=0.3.13
 opencv-python>=4.12.0
 

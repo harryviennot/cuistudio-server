@@ -3,7 +3,7 @@ Extraction orchestrator service
 Coordinates extraction from different sources and normalization
 """
 import logging
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, Union, List
 from supabase import Client
 
 from app.domain.enums import SourceType, ExtractionStatus
@@ -30,17 +30,17 @@ class ExtractionService:
         self,
         user_id: str,
         source_type: SourceType,
-        source: str,
+        source: Union[str, List[str]],
         job_id: Optional[str] = None,
         progress_callback: Optional[Callable[[int, str], None]] = None
     ) -> Dict[str, Any]:
         """
-        Extract recipe from source and create in database
+        Extract recipe from source(s) and create in database
 
         Args:
             user_id: User creating the recipe
             source_type: Type of source
-            source: Source URL or content
+            source: Source URL/content or list of URLs (for multi-image extraction)
             job_id: Optional extraction job ID for tracking
             progress_callback: Optional callback for progress updates
 
@@ -65,21 +65,38 @@ class ExtractionService:
             raw_content = await extractor.extract(source)
 
             # Step 2: Normalize and structure the recipe using AI
-            if progress_callback:
-                progress_callback(60, "Normalizing recipe data")
+            # For photos, the extractor already returns structured data, skip normalization
+            if source_type == SourceType.PHOTO:
+                # Photo extractor returns structured recipe directly
+                normalized_data = raw_content
 
-            if job_id:
-                await self._update_job_status(
-                    job_id,
-                    ExtractionStatus.PROCESSING,
-                    60,
-                    "Normalizing recipe data"
+                if progress_callback:
+                    progress_callback(60, "Recipe data extracted")
+
+                if job_id:
+                    await self._update_job_status(
+                        job_id,
+                        ExtractionStatus.PROCESSING,
+                        60,
+                        "Recipe data extracted"
+                    )
+            else:
+                # Other extractors return raw text that needs normalization
+                if progress_callback:
+                    progress_callback(60, "Normalizing recipe data")
+
+                if job_id:
+                    await self._update_job_status(
+                        job_id,
+                        ExtractionStatus.PROCESSING,
+                        60,
+                        "Normalizing recipe data"
+                    )
+
+                normalized_data = self.openai_service.normalize_recipe(
+                    raw_content["text"],
+                    source_type.value
                 )
-
-            normalized_data = self.openai_service.normalize_recipe(
-                raw_content["text"],
-                source_type.value
-            )
 
             # Step 3: Prepare recipe for database
             if progress_callback:
@@ -92,6 +109,11 @@ class ExtractionService:
                     80,
                     "Saving recipe"
                 )
+
+            # Get source URLs (could be single or multiple)
+            # For backwards compatibility with non-photo sources
+            source_url = raw_content.get("source_url") if "source_url" in raw_content else None
+            source_urls = raw_content.get("source_urls", [source_url] if source_url else [])
 
             recipe_data = {
                 "title": normalized_data["title"],
@@ -106,7 +128,7 @@ class ExtractionService:
                 "cook_time_minutes": normalized_data.get("cook_time_minutes"),
                 "total_time_minutes": normalized_data.get("total_time_minutes"),
                 "source_type": source_type.value,
-                "source_url": raw_content.get("source_url"),
+                "source_url": source_url,  # Keep for backward compatibility
                 "created_by": user_id,
                 "is_public": True  # Default to public as specified
             }
@@ -115,12 +137,21 @@ class ExtractionService:
             recipe = await self.recipe_repo.create(recipe_data)
 
             # Create contributor record
-            await self.supabase.table("recipe_contributors").insert({
+            self.supabase.table("recipe_contributors").insert({
                 "recipe_id": recipe["id"],
                 "user_id": user_id,
                 "contribution_type": "creator",
                 "order": 0
             }).execute()
+
+            # Log extraction stats if available (from photo extraction)
+            if "_extraction_stats" in normalized_data:
+                stats = normalized_data["_extraction_stats"]
+                logger.info(
+                    f"Extraction stats - Model: {stats.get('model')}, "
+                    f"Tokens: {stats.get('total_tokens')}, "
+                    f"Cost: ${stats.get('estimated_cost_usd', 0):.4f}"
+                )
 
             # Update job status to completed
             if job_id:
@@ -205,14 +236,19 @@ class ExtractionService:
         self,
         user_id: str,
         source_type: SourceType,
-        source_url: Optional[str] = None
+        source_url: Optional[str] = None,
+        source_urls: Optional[List[str]] = None
     ) -> str:
         """Create a new extraction job and return job ID"""
         try:
+            # Prepare source URLs array
+            urls_array = source_urls if source_urls else ([source_url] if source_url else [])
+
             result = self.supabase.table("extraction_jobs").insert({
                 "user_id": user_id,
                 "source_type": source_type.value,
-                "source_url": source_url,
+                "source_url": source_url or (urls_array[0] if urls_array else None),  # First URL for backward compatibility
+                "source_urls": urls_array,  # Array of all URLs
                 "status": ExtractionStatus.PENDING.value,
                 "progress_percentage": 0
             }).execute()
