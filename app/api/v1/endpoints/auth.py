@@ -15,6 +15,8 @@ from app.api.v1.schemas.auth import (
     CompleteProfileRequest,
     UpdateProfileRequest,
     RefreshTokenRequest,
+    LinkEmailIdentityRequest,
+    LinkPhoneIdentityRequest,
     AuthResponse,
     UserResponse
 )
@@ -22,6 +24,326 @@ from app.api.v1.schemas.common import MessageResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+
+# ============================================================================
+# ANONYMOUS AUTHENTICATION
+# ============================================================================
+
+@router.post(
+    "/anonymous",
+    response_model=AuthResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Anonymous Sign-in",
+    description="Sign in anonymously without providing any credentials. Returns persistent user identity.",
+    responses={
+        200: {
+            "description": "Anonymous sign-in successful",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
+                        "refresh_token": "v1.MR45tLN-Io...",
+                        "token_type": "bearer",
+                        "expires_in": 3600,
+                        "user": {
+                            "id": "uuid-here",
+                            "email": None,
+                            "phone": None,
+                            "created_at": "2024-01-01T00:00:00Z",
+                            "user_metadata": {},
+                            "is_new_user": True,
+                            "is_anonymous": True
+                        }
+                    }
+                }
+            }
+        }
+    }
+)
+async def sign_in_anonymously(
+    supabase: Client = Depends(get_supabase_client)
+):
+    """
+    ## Anonymous Sign-in
+
+    Creates a persistent anonymous user identity without requiring any credentials.
+
+    **Key Features:**
+    - No email, phone, or password required
+    - User gets a permanent UUID that persists across sessions
+    - JWT tokens work the same as authenticated users
+    - User can be upgraded to authenticated later via identity linking
+    - Anonymous users can create recipes and cookbooks
+
+    **Use Cases:**
+    - First-time app users who want to try features before signing up
+    - Users who want to create recipes without creating an account
+    - Temporary sessions that can be upgraded later
+
+    **Token Storage:**
+    - Frontend should store access_token and refresh_token securely
+    - Tokens persist the anonymous user's session
+    - When user reopens app, use stored tokens to maintain identity
+
+    **Upgrading to Authenticated:**
+    - Call `/auth/link-identity/email` or `/auth/link-identity/phone`
+    - Same UUID is kept, just adds email/phone identity
+    - All created recipes/cookbooks remain linked to the user
+
+    **Session Persistence:**
+    - As long as tokens are stored on device, user maintains same identity
+    - If app is uninstalled, tokens are lost and user gets new identity on reinstall
+    - Encourage users to link email/phone to prevent data loss
+
+    **RLS Behavior:**
+    - Anonymous users have `auth.uid()` just like authenticated users
+    - They can create/read/update their own data
+    - Subject to same Row Level Security policies
+    """
+    try:
+        # Sign in anonymously via Supabase
+        response = supabase.auth.sign_in_anonymously()
+
+        if not response.user or not response.session:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create anonymous session"
+            )
+
+        # Anonymous users are always "new" on creation
+        user_data = UserResponse(
+            id=response.user.id,
+            email=response.user.email,
+            phone=response.user.phone,
+            created_at=response.user.created_at,
+            user_metadata=response.user.user_metadata or {},
+            is_new_user=True,  # Anonymous users start as "new"
+            is_anonymous=True  # Mark as anonymous
+        )
+
+        return AuthResponse(
+            access_token=response.session.access_token,
+            refresh_token=response.session.refresh_token,
+            token_type="bearer",
+            user=user_data,
+            expires_in=response.session.expires_in or 3600,
+            expires_at=response.session.expires_at
+        )
+
+    except Exception as e:
+        logger.error(f"Anonymous sign-in error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Anonymous sign-in failed: {str(e)}"
+        )
+
+
+# ============================================================================
+# IDENTITY LINKING (ANONYMOUS TO AUTHENTICATED)
+# ============================================================================
+
+@router.post(
+    "/link-identity/email",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Link Email to Anonymous Account",
+    description="Convert anonymous user to authenticated by linking an email identity. Sends magic link for verification.",
+    responses={
+        200: {
+            "description": "Magic link sent for email verification",
+            "content": {
+                "application/json": {
+                    "example": {"message": "Check your email! We've sent you a verification link to complete the upgrade."}
+                }
+            }
+        },
+        400: {"description": "User is already authenticated or email is invalid"},
+        401: {"description": "Not authenticated"}
+    }
+)
+async def link_email_identity(
+    request: LinkEmailIdentityRequest,
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client)
+):
+    """
+    ## Link Email Identity to Anonymous Account
+
+    Converts an anonymous user to an authenticated user by linking an email identity.
+
+    **Requirements:**
+    - User must be currently signed in as anonymous
+    - User must not already have an email identity
+
+    **Flow:**
+    1. Anonymous user calls this endpoint with desired email
+    2. System sends magic link to that email
+    3. User clicks link in email
+    4. Call `/auth/email/verify` to complete the linking
+    5. Same UUID is kept, `is_anonymous` becomes `false`
+    6. All recipes/cookbooks remain linked to the user
+
+    **What Gets Preserved:**
+    - User UUID stays the same
+    - All created recipes
+    - All cookbooks
+    - All user preferences
+
+    **What Changes:**
+    - `is_anonymous` becomes `false`
+    - Email is added to the account
+    - User can now sign in with email magic link on other devices
+
+    **Important:**
+    - This is a one-way operation (cannot revert to anonymous)
+    - User's data is now permanently tied to this email
+    - Recommended to do this before user has significant data
+    """
+    try:
+        # Check if user is anonymous
+        if not current_user.get("is_anonymous", False):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User already has an authenticated identity"
+            )
+
+        # Check if user already has an email
+        if current_user.get("email"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User already has an email identity"
+            )
+
+        from app.core.config import get_settings
+        settings = get_settings()
+
+        # Update user with email identity via magic link
+        # Supabase handles the identity linking automatically
+        supabase.auth.update_user({
+            "email": request.email
+        })
+
+        # Send OTP for email verification
+        supabase.auth.sign_in_with_otp({
+            "email": request.email,
+            "options": {
+                "should_create_user": False,  # Don't create new user, link to existing
+                "email_redirect_to": f"{settings.SITE_URL}/auth/callback"
+            }
+        })
+
+        return MessageResponse(
+            message="Check your email! We've sent you a verification link to complete the upgrade."
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Email identity linking error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to link email identity: {str(e)}"
+        )
+
+
+@router.post(
+    "/link-identity/phone",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Link Phone to Anonymous Account",
+    description="Convert anonymous user to authenticated by linking a phone identity. Sends OTP for verification.",
+    responses={
+        200: {
+            "description": "OTP sent for phone verification",
+            "content": {
+                "application/json": {
+                    "example": {"message": "OTP sent to your phone. Please verify to complete the upgrade."}
+                }
+            }
+        },
+        400: {"description": "User is already authenticated or phone is invalid"},
+        401: {"description": "Not authenticated"}
+    }
+)
+async def link_phone_identity(
+    request: LinkPhoneIdentityRequest,
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client)
+):
+    """
+    ## Link Phone Identity to Anonymous Account
+
+    Converts an anonymous user to an authenticated user by linking a phone identity.
+
+    **Requirements:**
+    - User must be currently signed in as anonymous
+    - User must not already have a phone identity
+
+    **Flow:**
+    1. Anonymous user calls this endpoint with desired phone number
+    2. System sends 6-digit OTP to that phone
+    3. User enters OTP in app
+    4. Call `/auth/phone/verify` to complete the linking
+    5. Same UUID is kept, `is_anonymous` becomes `false`
+    6. All recipes/cookbooks remain linked to the user
+
+    **What Gets Preserved:**
+    - User UUID stays the same
+    - All created recipes
+    - All cookbooks
+    - All user preferences
+
+    **What Changes:**
+    - `is_anonymous` becomes `false`
+    - Phone number is added to the account
+    - User can now sign in with phone OTP on other devices
+
+    **Important:**
+    - This is a one-way operation (cannot revert to anonymous)
+    - User's data is now permanently tied to this phone number
+    - Recommended to do this before user has significant data
+    """
+    try:
+        # Check if user is anonymous
+        if not current_user.get("is_anonymous", False):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User already has an authenticated identity"
+            )
+
+        # Check if user already has a phone
+        if current_user.get("phone"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User already has a phone identity"
+            )
+
+        # Update user with phone identity
+        supabase.auth.update_user({
+            "phone": request.phone
+        })
+
+        # Send OTP for phone verification
+        supabase.auth.sign_in_with_otp({
+            "phone": request.phone,
+            "options": {
+                "should_create_user": False  # Don't create new user, link to existing
+            }
+        })
+
+        return MessageResponse(
+            message="OTP sent to your phone. Please verify to complete the upgrade."
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Phone identity linking error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to link phone identity: {str(e)}"
+        )
 
 
 # ============================================================================
@@ -165,17 +487,25 @@ async def verify_email_magic_link(
                 detail="Invalid or expired magic link"
             )
 
-        # Check if user is new (profile not completed)
-        user_metadata = response.user.user_metadata or {}
-        is_new_user = not user_metadata.get("profile_completed", False)
+        # Check if user is new by querying database (source of truth)
+        is_new_user = True
+        try:
+            profile_result = supabase.from_("users").select("id").eq("id", response.user.id).execute()
+            is_new_user = len(profile_result.data) == 0
+        except Exception as e:
+            logger.warning(f"Failed to check profile status: {e}")
+            # Fallback to metadata if database check fails
+            user_metadata = response.user.user_metadata or {}
+            is_new_user = not user_metadata.get("profile_completed", False)
 
         user_data = UserResponse(
             id=response.user.id,
             email=response.user.email,
             phone=response.user.phone,
             created_at=response.user.created_at,
-            user_metadata=user_metadata,
-            is_new_user=is_new_user
+            user_metadata=response.user.user_metadata or {},
+            is_new_user=is_new_user,
+            is_anonymous=getattr(response.user, 'is_anonymous', False)
         )
 
         return AuthResponse(
@@ -336,17 +666,25 @@ async def verify_phone_otp(
                 detail="Invalid OTP code"
             )
 
-        # Check if user is new (profile not completed)
-        user_metadata = response.user.user_metadata or {}
-        is_new_user = not user_metadata.get("profile_completed", False)
+        # Check if user is new by querying database (source of truth)
+        is_new_user = True
+        try:
+            profile_result = supabase.from_("users").select("id").eq("id", response.user.id).execute()
+            is_new_user = len(profile_result.data) == 0
+        except Exception as e:
+            logger.warning(f"Failed to check profile status: {e}")
+            # Fallback to metadata if database check fails
+            user_metadata = response.user.user_metadata or {}
+            is_new_user = not user_metadata.get("profile_completed", False)
 
         user_data = UserResponse(
             id=response.user.id,
             email=response.user.email,
             phone=response.user.phone,
             created_at=response.user.created_at,
-            user_metadata=user_metadata,
-            is_new_user=is_new_user
+            user_metadata=response.user.user_metadata or {},
+            is_new_user=is_new_user,
+            is_anonymous=getattr(response.user, 'is_anonymous', False)
         )
 
         return AuthResponse(
@@ -433,35 +771,40 @@ async def complete_profile(
     - User can now access the full application
     """
     try:
-        # Update user metadata to mark profile as completed
-        user_metadata = {
+        # DATABASE-FIRST PATTERN: Insert database record FIRST (fail-fast)
+        # This ensures atomicity - if DB insert fails, nothing has changed
+        user_record = {
+            "id": current_user["id"],
             "name": profile.name,
             "date_of_birth": profile.date_of_birth.isoformat(),
             "bio": profile.bio,
+            "email": current_user.get("email"),
+            "phone": current_user.get("phone"),
             "profile_completed": True
         }
 
-        # Update auth user metadata
-        supabase.auth.update_user({"data": user_metadata})
+        # Step 1: Insert into database (CRITICAL - must succeed)
+        db_result = admin_client.from_("users").upsert(user_record).execute()
 
-        # Insert or update profile in users table (using admin client to bypass RLS)
-        try:
-            user_record = {
-                "id": current_user["id"],
-                "name": profile.name,
-                "date_of_birth": profile.date_of_birth.isoformat(),
-                "bio": profile.bio,
-                "email": current_user.get("email"),
-                "phone": current_user.get("phone"),
-                "profile_completed": True
-            }
-            admin_client.from_("users").upsert(user_record).execute()
-        except Exception as db_error:
-            logger.error(f"Failed to insert profile into users table: {str(db_error)}")
+        if not db_result.data:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to save profile data"
             )
+
+        # Step 2: Update metadata (OPTIONAL - for convenience/caching)
+        # If this fails, it's non-critical since database is source of truth
+        try:
+            user_metadata = {
+                "name": profile.name,
+                "date_of_birth": profile.date_of_birth.isoformat(),
+                "bio": profile.bio,
+                "profile_completed": True
+            }
+            supabase.auth.update_user({"data": user_metadata})
+        except Exception as metadata_error:
+            # Log but don't fail - database record exists and is source of truth
+            logger.warning(f"Failed to update user metadata (non-critical): {str(metadata_error)}")
 
         return MessageResponse(message="Profile completed successfully!")
 
@@ -522,38 +865,45 @@ async def update_profile(
     - Format: `Authorization: Bearer <access_token>`
     """
     try:
-        # Get current user metadata
-        user_metadata = current_user.get("user_metadata", {})
-
-        # Update only provided fields in metadata
+        # DATABASE-FIRST PATTERN: Update database record FIRST (fail-fast)
+        update_data = {}
         if profile.name is not None:
-            user_metadata["name"] = profile.name
+            update_data["name"] = profile.name
         if profile.date_of_birth is not None:
-            user_metadata["date_of_birth"] = profile.date_of_birth.isoformat()
+            update_data["date_of_birth"] = profile.date_of_birth.isoformat()
         if profile.bio is not None:
-            user_metadata["bio"] = profile.bio
+            update_data["bio"] = profile.bio
 
-        # Update auth user metadata
-        supabase.auth.update_user({"data": user_metadata})
+        if not update_data:
+            return MessageResponse(message="No updates provided")
 
-        # Also update users table (using admin client to bypass RLS)
-        try:
-            update_data = {}
-            if profile.name is not None:
-                update_data["name"] = profile.name
-            if profile.date_of_birth is not None:
-                update_data["date_of_birth"] = profile.date_of_birth.isoformat()
-            if profile.bio is not None:
-                update_data["bio"] = profile.bio
+        # Add updated_at timestamp
+        update_data["updated_at"] = "now()"
 
-            if update_data:
-                admin_client.from_("users").update(update_data).eq("id", current_user["id"]).execute()
-        except Exception as db_error:
-            logger.error(f"Failed to update users table: {str(db_error)}")
+        # Step 1: Update database (CRITICAL - must succeed)
+        db_result = admin_client.from_("users").update(update_data).eq("id", current_user["id"]).execute()
+
+        if not db_result.data:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to update profile data"
             )
+
+        # Step 2: Sync metadata (OPTIONAL - for convenience/caching)
+        # If this fails, it's non-critical since database is source of truth
+        try:
+            user_metadata = current_user.get("user_metadata", {})
+            if profile.name is not None:
+                user_metadata["name"] = profile.name
+            if profile.date_of_birth is not None:
+                user_metadata["date_of_birth"] = profile.date_of_birth.isoformat()
+            if profile.bio is not None:
+                user_metadata["bio"] = profile.bio
+
+            supabase.auth.update_user({"data": user_metadata})
+        except Exception as metadata_error:
+            # Log but don't fail - database record is updated and is source of truth
+            logger.warning(f"Failed to sync user metadata (non-critical): {str(metadata_error)}")
 
         return MessageResponse(message="Profile updated successfully!")
 
@@ -661,16 +1011,15 @@ async def get_me(current_user: dict = Depends(get_current_user)):
     - Returns user information including metadata
     - Includes `is_new_user` flag indicating if profile completion is needed
     """
-    user_metadata = current_user.get("user_metadata", {})
-    is_new_user = not user_metadata.get("profile_completed", False)
-
+    # is_new_user is already checked in get_current_user via database
     return UserResponse(
         id=current_user["id"],
         email=current_user.get("email"),
         phone=current_user.get("phone"),
         created_at=current_user["created_at"],
-        user_metadata=user_metadata,
-        is_new_user=is_new_user
+        user_metadata=current_user.get("user_metadata", {}),
+        is_new_user=current_user.get("is_new_user", False),
+        is_anonymous=current_user.get("is_anonymous", False)
     )
 
 
@@ -740,17 +1089,25 @@ async def refresh_token(
                 detail="Invalid refresh token"
             )
 
-        # Check if user is new (profile not completed)
-        user_metadata = response.user.user_metadata or {}
-        is_new_user = not user_metadata.get("profile_completed", False)
+        # Check if user is new by querying database (source of truth)
+        is_new_user = True
+        try:
+            profile_result = supabase.from_("users").select("id").eq("id", response.user.id).execute()
+            is_new_user = len(profile_result.data) == 0
+        except Exception as e:
+            logger.warning(f"Failed to check profile status: {e}")
+            # Fallback to metadata if database check fails
+            user_metadata = response.user.user_metadata or {}
+            is_new_user = not user_metadata.get("profile_completed", False)
 
         user_data = UserResponse(
             id=response.user.id,
             email=response.user.email,
             phone=response.user.phone,
             created_at=response.user.created_at,
-            user_metadata=user_metadata,
-            is_new_user=is_new_user
+            user_metadata=response.user.user_metadata or {},
+            is_new_user=is_new_user,
+            is_anonymous=getattr(response.user, 'is_anonymous', False)
         )
 
         return AuthResponse(

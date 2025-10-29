@@ -32,6 +32,7 @@ Create a new user account. Requires email verification.
 **Endpoint:** `POST /auth/signup`
 
 **Request Body:**
+
 ```json
 {
   "email": "user@example.com",
@@ -40,6 +41,7 @@ Create a new user account. Requires email verification.
 ```
 
 **Response (200 OK):**
+
 ```json
 {
   "message": "Signup successful! Please check your email to verify your account."
@@ -47,6 +49,7 @@ Create a new user account. Requires email verification.
 ```
 
 **Notes:**
+
 - User will receive a confirmation email with verification link
 - User cannot login until email is verified
 - Password must be at least 6 characters
@@ -60,6 +63,7 @@ Verify email address using the token from confirmation email.
 **Endpoint:** `POST /auth/verify-email`
 
 **Request Body:**
+
 ```json
 {
   "token_hash": "hash_from_email_link",
@@ -68,6 +72,7 @@ Verify email address using the token from confirmation email.
 ```
 
 **Response (200 OK):**
+
 ```json
 {
   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
@@ -93,6 +98,7 @@ Authenticate existing user with email and password.
 **Endpoint:** `POST /auth/login`
 
 **Request Body:**
+
 ```json
 {
   "email": "user@example.com",
@@ -101,6 +107,7 @@ Authenticate existing user with email and password.
 ```
 
 **Response (200 OK):**
+
 ```json
 {
   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
@@ -118,6 +125,7 @@ Authenticate existing user with email and password.
 ```
 
 **Error Responses:**
+
 - `401 Unauthorized`: Invalid email or password
 - `400 Bad Request`: Email not verified
 
@@ -132,6 +140,7 @@ Sign up using phone number. Sends OTP via SMS.
 **Endpoint:** `POST /auth/signup-phone`
 
 **Request Body:**
+
 ```json
 {
   "phone": "+1234567890"
@@ -139,6 +148,7 @@ Sign up using phone number. Sends OTP via SMS.
 ```
 
 **Response (200 OK):**
+
 ```json
 {
   "message": "OTP sent to your phone number. Please verify to complete signup."
@@ -146,6 +156,7 @@ Sign up using phone number. Sends OTP via SMS.
 ```
 
 **Notes:**
+
 - Phone number must be in E.164 format (+country_code + number)
 - OTP valid for 60 seconds
 - User can request new OTP after 60 seconds
@@ -159,6 +170,7 @@ Verify phone number with OTP code received via SMS.
 **Endpoint:** `POST /auth/verify-phone-otp`
 
 **Request Body:**
+
 ```json
 {
   "phone": "+1234567890",
@@ -167,6 +179,7 @@ Verify phone number with OTP code received via SMS.
 ```
 
 **Response (200 OK):**
+
 ```json
 {
   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
@@ -186,6 +199,7 @@ Verify phone number with OTP code received via SMS.
 ```
 
 **Error Responses:**
+
 - `400 Bad Request`: Invalid or expired OTP
 
 ---
@@ -197,6 +211,7 @@ Login using phone number. Sends OTP via SMS.
 **Endpoint:** `POST /auth/login-phone`
 
 **Request Body:**
+
 ```json
 {
   "phone": "+1234567890"
@@ -204,6 +219,7 @@ Login using phone number. Sends OTP via SMS.
 ```
 
 **Response (200 OK):**
+
 ```json
 {
   "message": "If a user exists with this phone number, an OTP has been sent."
@@ -211,6 +227,7 @@ Login using phone number. Sends OTP via SMS.
 ```
 
 **Notes:**
+
 - For security, always returns success message even if phone doesn't exist
 - After receiving OTP, use `/auth/verify-phone-otp` to complete login
 
@@ -225,6 +242,7 @@ Get Google OAuth authorization URL.
 **Endpoint:** `GET /auth/oauth/google`
 
 **Response (200 OK):**
+
 ```json
 {
   "url": "https://accounts.google.com/o/oauth2/v2/auth?client_id=...",
@@ -233,6 +251,7 @@ Get Google OAuth authorization URL.
 ```
 
 **Frontend Flow:**
+
 1. Call this endpoint to get OAuth URL
 2. Redirect user to the returned URL
 3. User authenticates with Google
@@ -249,11 +268,13 @@ Exchange OAuth code for session (called automatically by Supabase redirect).
 **Endpoint:** `GET /auth/oauth/callback?code={code}`
 
 **Query Parameters:**
+
 - `code` (required): Authorization code from OAuth provider
 - `error` (optional): Error from OAuth provider
 - `error_description` (optional): Error description
 
 **Response (200 OK):**
+
 ```json
 {
   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
@@ -285,6 +306,7 @@ Get Apple OAuth authorization URL.
 **Endpoint:** `GET /auth/oauth/apple`
 
 **Response (200 OK):**
+
 ```json
 {
   "url": "https://appleid.apple.com/auth/authorize?client_id=...",
@@ -306,11 +328,13 @@ Get authenticated user information.
 **Endpoint:** `GET /auth/me`
 
 **Headers:**
+
 ```
 Authorization: Bearer {access_token}
 ```
 
 **Response (200 OK):**
+
 ```json
 {
   "id": "uuid",
@@ -321,6 +345,7 @@ Authorization: Bearer {access_token}
 ```
 
 **Error Responses:**
+
 - `401 Unauthorized`: Invalid or expired token
 
 ---
@@ -332,6 +357,7 @@ Refresh expired access token using refresh token.
 **Endpoint:** `POST /auth/refresh`
 
 **Request Body:**
+
 ```json
 {
   "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
@@ -339,6 +365,7 @@ Refresh expired access token using refresh token.
 ```
 
 **Response (200 OK):**
+
 ```json
 {
   "access_token": "new_access_token",
@@ -346,7 +373,9 @@ Refresh expired access token using refresh token.
   "token_type": "bearer",
   "expires_in": 3600,
   "expires_at": 1234567890,
-  "user": { /* user object */ }
+  "user": {
+    /* user object */
+  }
 }
 ```
 
@@ -359,11 +388,13 @@ Sign out current user.
 **Endpoint:** `POST /auth/logout`
 
 **Headers:**
+
 ```
 Authorization: Bearer {access_token}
 ```
 
 **Response (200 OK):**
+
 ```json
 {
   "message": "Successfully logged out"
@@ -381,6 +412,7 @@ Send password reset email.
 **Endpoint:** `POST /auth/password-reset`
 
 **Request Body:**
+
 ```json
 {
   "email": "user@example.com"
@@ -388,6 +420,7 @@ Send password reset email.
 ```
 
 **Response (200 OK):**
+
 ```json
 {
   "message": "If an account exists with this email, you will receive a password reset link"
@@ -395,6 +428,7 @@ Send password reset email.
 ```
 
 **Notes:**
+
 - Always returns success to prevent email enumeration
 - User receives email with reset link
 
@@ -407,11 +441,13 @@ Update password for authenticated user.
 **Endpoint:** `POST /auth/password-update`
 
 **Headers:**
+
 ```
 Authorization: Bearer {access_token}
 ```
 
 **Request Body:**
+
 ```json
 {
   "password": "newsecurepassword123"
@@ -419,6 +455,7 @@ Authorization: Bearer {access_token}
 ```
 
 **Response (200 OK):**
+
 ```json
 {
   "message": "Password updated successfully"
@@ -528,12 +565,14 @@ window.location.href = response.url
 ### Required Configurations
 
 #### 1. Email Authentication
+
 - Navigate to **Authentication > Providers > Email**
 - Enable "Enable email provider"
 - Enable "Confirm email"
 - Configure email templates in **Authentication > Email Templates**
 
 #### 2. Phone Authentication (Twilio)
+
 - Navigate to **Authentication > Providers > Phone**
 - Enable "Enable phone provider"
 - Select provider: **Twilio**
@@ -543,6 +582,7 @@ window.location.href = response.url
   - Phone Number (sender)
 
 #### 3. Google OAuth
+
 - Create OAuth credentials in [Google Cloud Console](https://console.cloud.google.com)
 - Navigate to **Authentication > Providers > Google**
 - Enable "Google enabled"
@@ -550,6 +590,7 @@ window.location.href = response.url
 - Authorized redirect URI: `https://<project-ref>.supabase.co/auth/v1/callback`
 
 #### 4. Apple OAuth
+
 - Set up Apple Sign In at [Apple Developer](https://developer.apple.com)
 - Navigate to **Authentication > Providers > Apple**
 - Enable "Apple enabled"
@@ -558,6 +599,7 @@ window.location.href = response.url
 - Authorized redirect URI: `https://<project-ref>.supabase.co/auth/v1/callback`
 
 #### 5. URL Configuration
+
 - Navigate to **Authentication > URL Configuration**
 - Set **Site URL**: `http://localhost:3000` (or your frontend URL)
 - Add **Redirect URLs**:
@@ -566,6 +608,7 @@ window.location.href = response.url
   - Add production URLs when deploying
 
 #### 6. Rate Limits
+
 - Navigate to **Authentication > Rate Limits**
 - Configure limits for:
   - Email OTP: 1 per 60 seconds
@@ -593,16 +636,16 @@ window.location.href = response.url
 
 ```typescript
 // auth.service.ts
-import axios from 'axios';
+import axios from "axios";
 
-const API_BASE = 'http://localhost:8000/api/v1/auth';
+const API_BASE = "http://localhost:8000/api/v1/auth";
 
 export const authService = {
   // Email signup
   async signupEmail(email: string, password: string) {
     const { data } = await axios.post(`${API_BASE}/signup`, {
       email,
-      password
+      password,
     });
     return data;
   },
@@ -611,10 +654,10 @@ export const authService = {
   async verifyEmail(tokenHash: string) {
     const { data } = await axios.post(`${API_BASE}/verify-email`, {
       token_hash: tokenHash,
-      type: 'email'
+      type: "email",
     });
-    localStorage.setItem('access_token', data.access_token);
-    localStorage.setItem('refresh_token', data.refresh_token);
+    localStorage.setItem("access_token", data.access_token);
+    localStorage.setItem("refresh_token", data.refresh_token);
     return data;
   },
 
@@ -622,17 +665,17 @@ export const authService = {
   async loginEmail(email: string, password: string) {
     const { data } = await axios.post(`${API_BASE}/login`, {
       email,
-      password
+      password,
     });
-    localStorage.setItem('access_token', data.access_token);
-    localStorage.setItem('refresh_token', data.refresh_token);
+    localStorage.setItem("access_token", data.access_token);
+    localStorage.setItem("refresh_token", data.refresh_token);
     return data;
   },
 
   // Phone signup
   async signupPhone(phone: string) {
     const { data } = await axios.post(`${API_BASE}/signup-phone`, {
-      phone
+      phone,
     });
     return data;
   },
@@ -641,10 +684,10 @@ export const authService = {
   async verifyPhoneOTP(phone: string, token: string) {
     const { data } = await axios.post(`${API_BASE}/verify-phone-otp`, {
       phone,
-      token
+      token,
     });
-    localStorage.setItem('access_token', data.access_token);
-    localStorage.setItem('refresh_token', data.refresh_token);
+    localStorage.setItem("access_token", data.access_token);
+    localStorage.setItem("refresh_token", data.refresh_token);
     return data;
   },
 
@@ -662,22 +705,26 @@ export const authService = {
 
   // Get current user
   async getCurrentUser() {
-    const token = localStorage.getItem('access_token');
+    const token = localStorage.getItem("access_token");
     const { data } = await axios.get(`${API_BASE}/me`, {
-      headers: { Authorization: `Bearer ${token}` }
+      headers: { Authorization: `Bearer ${token}` },
     });
     return data;
   },
 
   // Logout
   async logout() {
-    const token = localStorage.getItem('access_token');
-    await axios.post(`${API_BASE}/logout`, {}, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-  }
+    const token = localStorage.getItem("access_token");
+    await axios.post(
+      `${API_BASE}/logout`,
+      {},
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    );
+    localStorage.removeItem("access_token");
+    localStorage.removeItem("refresh_token");
+  },
 };
 ```
 
@@ -724,24 +771,28 @@ def test_signup_phone():
 ### Common Issues
 
 **1. Email confirmation not working**
+
 - Check email templates are configured in Supabase
 - Verify SMTP settings (use Supabase's built-in SMTP for testing)
 - Check spam folder
 - Ensure redirect URLs are whitelisted
 
 **2. Phone OTP not received**
+
 - Verify Twilio credentials in Supabase dashboard
 - Check Twilio account has sufficient credits
 - Ensure phone number is in E.164 format
 - Check Twilio logs for delivery issues
 
 **3. OAuth redirect not working**
+
 - Verify redirect URLs are whitelisted in Supabase
 - Check OAuth credentials are correct
 - Ensure callback URL matches configuration
 - Check browser console for CORS errors
 
 **4. Token expired errors**
+
 - Implement token refresh flow
 - Access tokens expire after 1 hour by default
 - Use refresh tokens to get new access tokens
@@ -750,22 +801,22 @@ def test_signup_phone():
 
 ## API Reference Summary
 
-| Method | Endpoint | Description | Auth Required |
-|--------|----------|-------------|---------------|
-| POST | `/auth/signup` | Email signup | No |
-| POST | `/auth/verify-email` | Verify email | No |
-| POST | `/auth/login` | Email login | No |
-| POST | `/auth/signup-phone` | Phone signup | No |
-| POST | `/auth/verify-phone-otp` | Verify phone OTP | No |
-| POST | `/auth/login-phone` | Phone login | No |
-| GET | `/auth/oauth/google` | Google OAuth | No |
-| GET | `/auth/oauth/apple` | Apple OAuth | No |
-| GET | `/auth/oauth/callback` | OAuth callback | No |
-| GET | `/auth/me` | Get current user | Yes |
-| POST | `/auth/refresh` | Refresh token | No |
-| POST | `/auth/logout` | Logout | Yes |
-| POST | `/auth/password-reset` | Request password reset | No |
-| POST | `/auth/password-update` | Update password | Yes |
+| Method | Endpoint                 | Description            | Auth Required |
+| ------ | ------------------------ | ---------------------- | ------------- |
+| POST   | `/auth/signup`           | Email signup           | No            |
+| POST   | `/auth/verify-email`     | Verify email           | No            |
+| POST   | `/auth/login`            | Email login            | No            |
+| POST   | `/auth/signup-phone`     | Phone signup           | No            |
+| POST   | `/auth/verify-phone-otp` | Verify phone OTP       | No            |
+| POST   | `/auth/login-phone`      | Phone login            | No            |
+| GET    | `/auth/oauth/google`     | Google OAuth           | No            |
+| GET    | `/auth/oauth/apple`      | Apple OAuth            | No            |
+| GET    | `/auth/oauth/callback`   | OAuth callback         | No            |
+| GET    | `/auth/me`               | Get current user       | Yes           |
+| POST   | `/auth/refresh`          | Refresh token          | No            |
+| POST   | `/auth/logout`           | Logout                 | Yes           |
+| POST   | `/auth/password-reset`   | Request password reset | No            |
+| POST   | `/auth/password-update`  | Update password        | Yes           |
 
 ---
 

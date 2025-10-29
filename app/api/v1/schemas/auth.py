@@ -121,6 +121,7 @@ class UserResponse(BaseModel):
     created_at: datetime
     user_metadata: Optional[dict] = None
     is_new_user: bool = False
+    is_anonymous: bool = False
 
 
 class AuthResponse(BaseModel):
@@ -136,3 +137,38 @@ class AuthResponse(BaseModel):
 class RefreshTokenRequest(BaseModel):
     """Refresh token request"""
     refresh_token: str
+
+
+# ============================================================================
+# IDENTITY LINKING (ANONYMOUS TO AUTHENTICATED)
+# ============================================================================
+
+class LinkEmailIdentityRequest(BaseModel):
+    """Link email identity to anonymous account"""
+    email: EmailStr = Field(..., examples=["user@example.com"], description="Email address to link")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "email": "user@example.com"
+            }
+        }
+    }
+
+
+class LinkPhoneIdentityRequest(BaseModel):
+    """Link phone identity to anonymous account"""
+    phone: str = Field(
+        ...,
+        pattern=r"^\+[1-9]\d{1,14}$",
+        examples=["+15551234567"],
+        description="Phone number in E.164 format to link"
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "phone": "+15551234567"
+            }
+        }
+    }

@@ -103,30 +103,40 @@ Documentation: ~3,000+ lines
 ## Key Directories
 
 ### `/app/api/v1/endpoints/`
+
 Contains all API route handlers. Each file corresponds to a resource:
+
 - `auth.py` - User authentication and authorization
 - `recipes.py` - Recipe CRUD, forking, searching
 - `cookbooks.py` - Cookbook and folder management
 - `extraction.py` - Recipe extraction job handling
 
 ### `/app/services/`
+
 Business logic and external integrations:
+
 - `openai_service.py` - AI-powered recipe processing
 - `extraction_service.py` - Coordinates extraction from multiple sources
 - `extractors/` - Source-specific extraction implementations
 
 ### `/app/repositories/`
+
 Database operations abstraction:
+
 - `base.py` - Common CRUD operations
 - Specific repositories for each domain entity
 
 ### `/app/domain/`
+
 Core business entities and rules:
+
 - `models.py` - Pydantic models for business entities
 - `enums.py` - Domain-specific enumerations
 
 ### `/database/`
+
 Database schema and setup:
+
 - `schema.sql` - Complete PostgreSQL schema with RLS policies
 - `README.md` - Database setup instructions
 
@@ -149,15 +159,18 @@ Database schema and setup:
 ## Entry Points
 
 ### Main Application
+
 ```bash
 python main.py
 ```
+
 - Starts the FastAPI server
 - Loads configuration
 - Sets up logging
 - Includes all routers
 
 ### API Documentation
+
 ```
 http://localhost:8000/api/docs       # Swagger UI
 http://localhost:8000/api/redoc      # ReDoc
@@ -195,12 +208,14 @@ from app.api.v1.schemas.recipe import RecipeResponse, RecipeCreateRequest
 ## Directory Conventions
 
 ### Naming
+
 - **Files**: `snake_case.py`
 - **Classes**: `PascalCase`
 - **Functions**: `snake_case()`
 - **Constants**: `UPPER_CASE`
 
 ### Organization
+
 - One main class per file
 - Related schemas grouped together
 - Endpoints organized by resource
@@ -249,23 +264,27 @@ tests/
 ## Code Metrics
 
 ### Repository Layer
+
 - 4 repository classes
 - ~500 lines of code
 - Covers all database operations
 
 ### Service Layer
+
 - 2 main services
 - 5 extractors
 - ~1,500 lines of code
 - Handles all business logic
 
 ### API Layer
+
 - 4 endpoint files
 - 30+ routes
 - ~2,000 lines of code
 - Full REST API
 
 ### Domain Layer
+
 - 15+ domain models
 - 10+ enumerations
 - ~800 lines of code
@@ -273,6 +292,7 @@ tests/
 ## Dependencies
 
 ### Production Dependencies
+
 - FastAPI (web framework)
 - Supabase (database, auth, storage)
 - OpenAI (AI services)
@@ -281,6 +301,7 @@ tests/
 - Beautiful Soup (web scraping)
 
 ### Development Dependencies
+
 - pytest (testing)
 - black (code formatting)
 - mypy (type checking)
@@ -297,18 +318,21 @@ tests/
 ## Maintenance
 
 ### Adding Files
+
 - Place in appropriate directory
 - Follow naming conventions
 - Update imports
 - Add to documentation if needed
 
 ### Removing Files
+
 - Check for dependencies
 - Update imports
 - Remove from routers/services
 - Update documentation
 
 ### Refactoring
+
 - Keep layer separation
 - Maintain consistent patterns
 - Update tests
