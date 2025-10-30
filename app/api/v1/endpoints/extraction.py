@@ -2,12 +2,16 @@
 Recipe extraction endpoints
 """
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, File, UploadFile, Request
+from sse_starlette.sse import EventSourceResponse
 from supabase import Client
 from typing import List
 import logging
+import asyncio
+import json
 
 from app.core.database import get_supabase_client, get_supabase_admin_client, get_supabase_user_client
 from app.core.security import get_current_user
+from app.core.events import get_event_broadcaster
 from app.services.extraction_service import ExtractionService
 from app.services.upload_service import UploadService
 from app.api.v1.schemas.extraction import (
@@ -16,7 +20,7 @@ from app.api.v1.schemas.extraction import (
     ImageExtractionResponse
 )
 from app.api.v1.schemas.upload import MAX_IMAGES_PER_EXTRACTION
-from app.domain.enums import SourceType
+from app.domain.enums import SourceType, ExtractionStatus
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/extraction", tags=["Extraction"])
@@ -185,4 +189,130 @@ async def get_extraction_job(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get extraction job: {str(e)}"
+        )
+
+
+@router.get("/jobs/{job_id}/stream")
+async def stream_extraction_job(
+    job_id: str,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+    user_client: Client = Depends(get_supabase_user_client)
+):
+    """
+    Stream extraction job status updates via Server-Sent Events (SSE).
+
+    This endpoint provides real-time progress updates, reducing the need for polling.
+    The connection automatically closes when the job completes or fails.
+
+    Event format:
+    {
+        "id": "job_id",
+        "status": "processing" | "completed" | "failed",
+        "progress_percentage": 0-100,
+        "current_step": "Step description",
+        "recipe_id": "recipe_id" (when completed),
+        "error_message": "error" (when failed)
+    }
+    """
+    try:
+        extraction_service = ExtractionService(user_client)
+
+        # Verify job exists and user has access
+        job = await extraction_service.get_job_status(job_id)
+
+        if not job:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Job not found"
+            )
+
+        if job["user_id"] != current_user["id"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have access to this job"
+            )
+
+        # Get event broadcaster
+        broadcaster = get_event_broadcaster()
+
+        async def event_stream():
+            """Generate Server-Sent Events for job updates"""
+            try:
+                # Send initial state immediately
+                initial_data = {
+                    "id": job["id"],
+                    "status": job["status"],
+                    "progress_percentage": job.get("progress_percentage", 0),
+                    "current_step": job.get("current_step", ""),
+                    "recipe_id": job.get("recipe_id"),
+                    "error_message": job.get("error_message")
+                }
+                yield {
+                    "event": "job_update",
+                    "data": json.dumps(initial_data)
+                }
+
+                # Send an immediate heartbeat to keep connection alive
+                await asyncio.sleep(0.1)
+                yield {"comment": "connected"}
+
+                # If job is already complete, close immediately
+                if job["status"] in [ExtractionStatus.COMPLETED.value, ExtractionStatus.FAILED.value]:
+                    logger.info(f"Job {job_id} already {job['status']}, closing SSE connection")
+                    return
+
+                # Subscribe to real-time updates with timeout
+                async with broadcaster.subscribe(job_id) as event_generator:
+                    # Set a timeout for waiting for events (30 seconds)
+                    while True:
+                        try:
+                            # Wait for next event with timeout
+                            event_data = await asyncio.wait_for(
+                                event_generator.__anext__(),
+                                timeout=30.0
+                            )
+
+                            # Check if client disconnected
+                            if await request.is_disconnected():
+                                logger.info(f"Client disconnected from SSE stream for job {job_id}")
+                                break
+
+                            # Send update event (serialize to JSON)
+                            yield {
+                                "event": "job_update",
+                                "data": json.dumps(event_data)
+                            }
+
+                            # Close connection if job is complete
+                            if event_data.get("status") in [ExtractionStatus.COMPLETED.value, ExtractionStatus.FAILED.value]:
+                                logger.info(f"Job {job_id} {event_data['status']}, closing SSE connection")
+                                break
+
+                        except asyncio.TimeoutError:
+                            # Send keep-alive ping every 30 seconds
+                            yield {"comment": "keep-alive"}
+                        except StopAsyncIteration:
+                            # No more events
+                            break
+
+            except asyncio.CancelledError:
+                logger.info(f"SSE stream cancelled for job {job_id}")
+            except Exception as e:
+                logger.error(f"Error in SSE stream for job {job_id}: {e}")
+                # Send error event
+                yield {
+                    "event": "error",
+                    "data": json.dumps({"message": "Stream error occurred"})
+                }
+
+        return EventSourceResponse(event_stream())
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error starting SSE stream: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start event stream: {str(e)}"
         )

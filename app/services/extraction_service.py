@@ -15,6 +15,7 @@ from app.services.extractors.url_extractor import URLExtractor
 from app.services.extractors.paste_extractor import PasteExtractor
 from app.services.openai_service import OpenAIService
 from app.repositories.recipe_repository import RecipeRepository
+from app.core.events import get_event_broadcaster
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +83,6 @@ class ExtractionService:
                 # Photo extractor returns structured recipe directly
                 normalized_data = raw_content
 
-                if progress_callback:
-                    progress_callback(60, "Recipe data extracted")
-
                 if job_id:
                     await self._update_job_status(
                         job_id,
@@ -92,11 +90,11 @@ class ExtractionService:
                         60,
                         "Recipe data extracted"
                     )
+                elif progress_callback:
+                    # Only use progress_callback if no job_id (backward compatibility)
+                    progress_callback(60, "Recipe data extracted")
             else:
                 # Other extractors return raw text that needs normalization
-                if progress_callback:
-                    progress_callback(60, "Normalizing recipe data")
-
                 if job_id:
                     await self._update_job_status(
                         job_id,
@@ -104,6 +102,9 @@ class ExtractionService:
                         60,
                         "Normalizing recipe data"
                     )
+                elif progress_callback:
+                    # Only use progress_callback if no job_id (backward compatibility)
+                    progress_callback(60, "Normalizing recipe data")
 
                 normalized_data = await self.openai_service.normalize_recipe(
                     raw_content["text"],
@@ -111,9 +112,6 @@ class ExtractionService:
                 )
 
             # Step 3: Prepare recipe for database
-            if progress_callback:
-                progress_callback(80, "Saving recipe")
-
             if job_id:
                 await self._update_job_status(
                     job_id,
@@ -121,6 +119,9 @@ class ExtractionService:
                     80,
                     "Saving recipe"
                 )
+            elif progress_callback:
+                # Only use progress_callback if no job_id (backward compatibility)
+                progress_callback(80, "Saving recipe")
 
             # Get source URLs (could be single or multiple)
             # For backwards compatibility with non-photo sources
@@ -174,8 +175,8 @@ class ExtractionService:
                     "Extraction complete",
                     recipe_id=recipe["id"]
                 )
-
-            if progress_callback:
+            elif progress_callback:
+                # Only use progress_callback if no job_id (backward compatibility)
                 progress_callback(100, "Recipe created successfully")
 
             logger.info(f"Successfully created recipe {recipe['id']} from {source_type.value}")
@@ -243,6 +244,26 @@ class ExtractionService:
                     .eq("id", job_id)
                     .execute()
             )
+
+            # Broadcast event to SSE subscribers
+            try:
+                broadcaster = get_event_broadcaster()
+                event_data = {
+                    "id": job_id,
+                    "status": status.value,
+                    "progress_percentage": progress,
+                    "current_step": step
+                }
+                if recipe_id:
+                    event_data["recipe_id"] = recipe_id
+                if error_message:
+                    event_data["error_message"] = error_message
+
+                await broadcaster.publish(job_id, event_data)
+                logger.debug(f"Broadcasted event for job {job_id}: {event_data}")
+            except Exception as broadcast_error:
+                # Don't fail the update if broadcast fails
+                logger.error(f"Error broadcasting event: {str(broadcast_error)}")
 
         except Exception as e:
             logger.error(f"Error updating job status: {str(e)}")

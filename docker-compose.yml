@@ -1,12 +1,30 @@
 version: '3.8'
 
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: cuistudio-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
   cuistudio-server:
     build:
       context: .
       dockerfile: Dockerfile
       target: ${BUILD_TARGET:-development}
     container_name: cuistudio-server
+    depends_on:
+      redis:
+        condition: service_healthy
     ports:
       - "8000:8000"
     environment:
@@ -22,6 +40,7 @@ services:
       - DEBUG=${DEBUG:-true}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - APP_ENV=${APP_ENV:-development}
+      - REDIS_URL=redis://redis:6379/0
     env_file:
       - .env
     volumes:
@@ -39,6 +58,7 @@ services:
       start_period: 40s
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
-# Optional: Add a volume for persistent data
+# Volumes for persistent data
 volumes:
+  redis-data:
   tmp-data:
