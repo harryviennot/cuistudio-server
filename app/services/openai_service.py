@@ -45,13 +45,23 @@ Your task is to extract recipe information from raw content and structure it pro
 
 IMPORTANT RULES:
 1. Extract ALL ingredients with quantities and units
-2. Break down instructions into clear, numbered steps
-3. Estimate missing timing information based on the recipe
-4. Assign appropriate difficulty level (easy, medium, hard)
-5. Add relevant tags and categories
-6. If servings are not specified, make a reasonable estimate
-7. If prep/cook times are not mentioned, estimate based on the recipe complexity
-8. Return ONLY valid JSON, no markdown formatting
+2. Group ingredients logically by recipe sections:
+   - "For the [component]" - e.g., "For the duck", "For the sauce", "For the pasta"
+   - "For the garnish" - garnish/decoration ingredients
+   - "To taste" - salt, pepper, and seasonings added to preference
+   - Use null if no logical groups exist
+3. Break down instructions into clear, numbered steps
+4. Group instructions logically by recipe sections:
+   - "For the [component]" - e.g., "For the duck", "For the sauce", "For the pasta"
+   - "Assembly" - final plating/serving steps
+   - "For the garnish" - garnish preparation
+   - Use null if no logical groups exist
+5. Estimate missing timing information based on the recipe
+6. Assign appropriate difficulty level (easy, medium, hard)
+7. Add relevant tags and categories
+8. If servings are not specified, make a reasonable estimate
+9. If prep/cook times are not mentioned, estimate based on the recipe complexity
+10. Return ONLY valid JSON, no markdown formatting
 
 Response format:
 {
@@ -61,7 +71,7 @@ Response format:
         {"name": "ingredient name", "quantity": 2, "unit": "cups", "notes": "optional notes", "group": "optional group like 'For the sauce'"}
     ],
     "instructions": [
-        {"step_number": 1, "text": "instruction text", "timer_minutes": null or number}
+        {"step_number": 1, "text": "instruction text", "timer_minutes": null or number, "group": "optional group like 'For the sauce' or 'Assembly'"}
     ],
     "servings": 4,
     "difficulty": "easy|medium|hard",
@@ -339,7 +349,12 @@ IMPORTANT RULES:
    - "To taste" - salt, pepper, and seasonings added to preference
    - If no logical groups exist, use null for the group field
 5. Number all instruction steps sequentially
-6. ESTIMATE cooking time for EACH step based on the action:
+6. Group instructions logically based on recipe sections:
+   - "For the [component]" - e.g., "For the duck", "For the sauce", "For the pasta"
+   - "Assembly" - final plating/serving steps
+   - "For the garnish" - garnish preparation
+   - Use null if no logical groups exist
+7. ESTIMATE cooking time for EACH step based on the action:
    - Prep tasks (chopping, mixing): null
    - "Faites revenir/sauté": 3-5 minutes
    - "Laissez cuire/cook": extract exact time if mentioned, otherwise estimate (10-30 min)
@@ -347,8 +362,8 @@ IMPORTANT RULES:
    - "Laissez reposer/rest": extract exact time if mentioned
    - "Mixez/blend": null (instant)
    - Use the TOTAL cook time to validate individual step times add up reasonably
-7. If servings not visible, estimate based on ingredient quantities
-8. Return ONLY valid JSON, no markdown formatting
+8. If servings not visible, estimate based on ingredient quantities
+9. Return ONLY valid JSON, no markdown formatting
 
 Response format:
 {
@@ -358,7 +373,7 @@ Response format:
         {"name": "ingredient name", "quantity": 2.0, "unit": "cups", "notes": "optional prep notes", "group": "For the soup"}
     ],
     "instructions": [
-        {"step_number": 1, "text": "instruction text", "timer_minutes": 5}
+        {"step_number": 1, "text": "instruction text", "timer_minutes": 5, "group": "For the soup"}
     ],
     "servings": 4,
     "difficulty": "easy|medium|hard",
@@ -470,11 +485,16 @@ IMPORTANT RULES:
    - "To taste" - seasonings added to preference
    - Use null if no logical grouping exists
 7. Number all instruction steps sequentially across all images
-8. ESTIMATE cooking time for EACH step based on the action:
+8. Group instructions logically based on recipe sections:
+   - "For the [component]" - e.g., "For the duck", "For the sauce", "For the pasta"
+   - "Assembly" - final plating/serving steps
+   - "For the garnish" - garnish preparation
+   - Use null if no logical groups exist
+9. ESTIMATE cooking time for EACH step based on the action:
    - Prep tasks (chopping, mixing): null
    - Cooking tasks: extract exact time if mentioned, otherwise estimate based on action
    - Use total cook time to validate individual step times
-9. Return ONLY valid JSON, no markdown formatting
+10. Return ONLY valid JSON, no markdown formatting
 
 Response format:
 {
@@ -484,7 +504,7 @@ Response format:
         {"name": "ingredient name", "quantity": 2.0, "unit": "cups", "notes": "optional", "group": "For the soup"}
     ],
     "instructions": [
-        {"step_number": 1, "text": "instruction text", "timer_minutes": 5}
+        {"step_number": 1, "text": "instruction text", "timer_minutes": 5, "group": "For the soup"}
     ],
     "servings": 4,
     "difficulty": "easy|medium|hard",

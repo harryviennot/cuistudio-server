@@ -30,6 +30,7 @@ class Instruction(BaseModel):
     text: str
     timer_minutes: Optional[int] = None  # If this step requires a timer
     image_url: Optional[str] = None  # Optional step illustration
+    group: Optional[str] = None  # e.g., "For the sauce", "Assembly"
 
 
 class RecipeTimings(BaseModel):
