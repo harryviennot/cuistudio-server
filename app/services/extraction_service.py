@@ -58,11 +58,22 @@ class ExtractionService:
                     "Starting extraction"
                 )
 
-            # Step 1: Extract raw content based on source type
-            if progress_callback:
-                progress_callback(10, "Extracting content from source")
+            # Create progress callback that updates database if job_id is provided
+            def sync_progress_callback(percentage: int, step: str):
+                """Synchronous wrapper for progress updates"""
+                if progress_callback:
+                    progress_callback(percentage, step)
+                if job_id:
+                    # Schedule async update in event loop
+                    asyncio.create_task(self._update_job_status(
+                        job_id,
+                        ExtractionStatus.PROCESSING,
+                        percentage,
+                        step
+                    ))
 
-            extractor = self._get_extractor(source_type, progress_callback)
+            # Step 1: Extract raw content based on source type
+            extractor = self._get_extractor(source_type, sync_progress_callback)
             raw_content = await extractor.extract(source)
 
             # Step 2: Normalize and structure the recipe using AI
