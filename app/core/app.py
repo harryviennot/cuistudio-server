@@ -5,10 +5,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import asynccontextmanager
+import logging
 
 from app.core.config import get_settings
 from app.core.logging_config import setup_logging
+from app.core.events import init_event_broadcaster, shutdown_event_broadcaster
 from app.api.v1.router import api_router
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -16,9 +20,16 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     # Startup
     setup_logging()
+    logger.info("Initializing event broadcaster...")
+    await init_event_broadcaster()
+    logger.info("Application startup complete")
+
     yield
+
     # Shutdown
-    # Add any cleanup here
+    logger.info("Shutting down event broadcaster...")
+    await shutdown_event_broadcaster()
+    logger.info("Application shutdown complete")
 
 
 def create_app() -> FastAPI:
