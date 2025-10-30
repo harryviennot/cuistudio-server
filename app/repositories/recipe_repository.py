@@ -44,10 +44,20 @@ class RecipeRepository(BaseRepository):
         offset: int = 0,
         include_public: bool = False
     ) -> List[Dict[str, Any]]:
-        """Get recipes created by a user"""
+        """
+        Get recipes created by a user
+
+        Optimized to select only fields needed for list view (excludes heavy JSONB arrays)
+        """
         try:
+            # Select only fields needed for list view (excludes ingredients & instructions)
             query = self.supabase.table(self.table_name)\
-                .select("*")\
+                .select("""
+                    id, title, description, image_url,
+                    servings, difficulty, tags, categories,
+                    prep_time_minutes, cook_time_minutes, total_time_minutes,
+                    created_by, is_public, fork_count, created_at
+                """)\
                 .eq("created_by", user_id)\
                 .order("created_at", desc=True)\
                 .limit(limit)\

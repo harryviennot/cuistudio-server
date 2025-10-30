@@ -3,7 +3,7 @@ Recipe endpoints
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from supabase import Client
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import logging
 
 from app.core.database import get_supabase_client
@@ -180,7 +180,12 @@ async def get_my_recipes(
         repo = RecipeRepository(supabase)
         recipes = await repo.get_user_recipes(current_user["id"], limit, offset)
 
-        return [await _format_list_item_response(r, current_user["id"], supabase) for r in recipes]
+        # Batch fetch user data for all recipes in one query (eliminates N+1 problem)
+        user_repo = UserRecipeRepository(supabase)
+        recipe_ids = [r["id"] for r in recipes]
+        user_data_map = await user_repo.get_user_data_for_recipes(current_user["id"], recipe_ids)
+
+        return [await _format_list_item_response(r, current_user["id"], supabase, user_data_map.get(r["id"])) for r in recipes]
 
     except Exception as e:
         logger.error(f"Error getting user recipes: {str(e)}")
@@ -559,19 +564,30 @@ async def _format_recipe_response(
 async def _format_list_item_response(
     recipe: dict,
     user_id: Optional[str],
-    supabase: Client
+    supabase: Client,
+    user_recipe_data: Optional[Dict[str, Any]] = None
 ) -> RecipeListItemResponse:
-    """Format recipe dict into RecipeListItemResponse"""
+    """
+    Format recipe dict into RecipeListItemResponse
+
+    Args:
+        recipe: Recipe data from database
+        user_id: Current user ID (if authenticated)
+        supabase: Supabase client
+        user_recipe_data: Pre-fetched user data (optional, for batch operations)
+    """
     # Get user data if authenticated
     user_rating = None
     is_favorite = False
 
-    if user_id:
+    if user_id and user_recipe_data is None:
+        # Fallback to single query if data not pre-fetched
         user_repo = UserRecipeRepository(supabase)
         user_recipe_data = await user_repo.get_by_user_and_recipe(user_id, recipe["id"])
-        if user_recipe_data:
-            user_rating = user_recipe_data.get("rating")
-            is_favorite = user_recipe_data.get("is_favorite", False)
+
+    if user_recipe_data:
+        user_rating = user_recipe_data.get("rating")
+        is_favorite = user_recipe_data.get("is_favorite", False)
 
     timings = None
     if recipe.get("prep_time_minutes") or recipe.get("cook_time_minutes"):

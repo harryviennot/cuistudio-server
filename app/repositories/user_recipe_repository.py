@@ -1,7 +1,7 @@
 """
 User recipe data repository
 """
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from supabase import Client
 import logging
 
@@ -32,6 +32,33 @@ class UserRecipeRepository(BaseRepository):
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error fetching user recipe data: {str(e)}")
+            raise
+
+    async def get_user_data_for_recipes(
+        self,
+        user_id: str,
+        recipe_ids: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Batch fetch user data for multiple recipes in a single query.
+        Returns a dict mapping recipe_id -> user_data
+
+        This eliminates N+1 query problem when loading recipe lists.
+        """
+        try:
+            if not recipe_ids:
+                return {}
+
+            response = self.supabase.table(self.table_name)\
+                .select("recipe_id, rating, is_favorite")\
+                .eq("user_id", user_id)\
+                .in_("recipe_id", recipe_ids)\
+                .execute()
+
+            # Create map of recipe_id -> user_data for O(1) lookups
+            return {row["recipe_id"]: row for row in (response.data or [])}
+        except Exception as e:
+            logger.error(f"Error batch fetching user recipe data: {str(e)}")
             raise
 
     async def upsert_user_data(
