@@ -74,7 +74,11 @@ class PhotoExtractor(BaseExtractor):
 
         self.update_progress(100, "Extraction complete")
 
-        # Return the structured recipe data directly
+        # Add source URL to the recipe data so it can be used as image_url
+        recipe_data["source_url"] = source
+        recipe_data["source_urls"] = [source]
+
+        # Return the structured recipe data with source URLs
         return recipe_data
 
     async def _extract_multiple_images(self, sources: List[str]) -> Dict[str, Any]:
@@ -96,7 +100,11 @@ class PhotoExtractor(BaseExtractor):
 
         self.update_progress(100, "Multi-image extraction complete")
 
-        # Return the structured recipe data directly
+        # Add source URLs to the recipe data so first image can be used as image_url
+        recipe_data["source_url"] = sources[0]  # First image for backward compatibility
+        recipe_data["source_urls"] = sources  # All images
+
+        # Return the structured recipe data with source URLs
         return recipe_data
 
     async def _convert_image_if_needed(self, image_source: str) -> str:
