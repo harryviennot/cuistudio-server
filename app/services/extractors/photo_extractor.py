@@ -1,6 +1,7 @@
 """
 Photo extractor using OCR and GPT-4 Vision
 """
+import asyncio
 import os
 import logging
 from typing import Dict, Any, List, Union
@@ -69,7 +70,7 @@ class PhotoExtractor(BaseExtractor):
 
         self.update_progress(50, "Analyzing image and validating with AI")
         # Use GPT-4 Vision to validate OCR and extract structured recipe
-        recipe_data = self.openai_service.extract_recipe_from_image_with_ocr(source, ocr_text)
+        recipe_data = await self.openai_service.extract_recipe_from_image_with_ocr(source, ocr_text)
 
         self.update_progress(100, "Extraction complete")
 
@@ -91,7 +92,7 @@ class PhotoExtractor(BaseExtractor):
 
         # Step 2: Use GPT-4 Vision to analyze all images + OCR together
         self.update_progress(60, f"Analyzing {image_count} images and validating with AI")
-        recipe_data = self.openai_service.extract_recipe_from_images_with_ocr(sources, all_ocr_texts)
+        recipe_data = await self.openai_service.extract_recipe_from_images_with_ocr(sources, all_ocr_texts)
 
         self.update_progress(100, "Multi-image extraction complete")
 
@@ -173,15 +174,19 @@ class PhotoExtractor(BaseExtractor):
                     image_data = response.content
                 image = Image.open(io.BytesIO(image_data))
             else:
-                image = Image.open(image_source)
+                image = await asyncio.to_thread(Image.open, image_source)
 
-            # Preprocess image for better OCR
-            image = self._preprocess_image_for_ocr(image)
+            # Preprocess image for better OCR (CPU-bound, run in thread pool)
+            image = await asyncio.to_thread(self._preprocess_image_for_ocr, image)
 
-            # Run OCR with optimized settings
+            # Run OCR with optimized settings (CPU-bound, run in thread pool)
             # PSM 6 = Assume a single uniform block of text (good for recipe cards)
             custom_config = r'--oem 3 --psm 6'
-            text = pytesseract.image_to_string(image, config=custom_config)
+            text = await asyncio.to_thread(
+                pytesseract.image_to_string,
+                image,
+                config=custom_config
+            )
 
             return text.strip()
 

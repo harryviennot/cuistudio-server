@@ -5,7 +5,7 @@ Easily replaceable with other AI providers
 from typing import Dict, Any, List, Optional
 import json
 import logging
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from app.core.config import get_settings
 from app.domain.models import Recipe, Ingredient, Instruction
@@ -18,10 +18,10 @@ class OpenAIService:
     """Service for OpenAI API interactions"""
 
     def __init__(self):
-        self.client = OpenAI(api_key=settings.OPENAI_API_KEY, organization=settings.OPENAI_ORGANIZATION_ID, project=settings.OPENAI_PROJECT_ID)
+        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY, organization=settings.OPENAI_ORGANIZATION_ID, project=settings.OPENAI_PROJECT_ID)
         self.model = "gpt-4o"  # Using GPT-4
 
-    def normalize_recipe(
+    async def normalize_recipe(
         self,
         raw_content: str,
         source_type: str,
@@ -80,7 +80,7 @@ Response format:
 
 Extract and normalize into JSON format."""
 
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -309,7 +309,7 @@ Combine information from all images to give a complete picture of the recipe."""
 
             return "\n\n".join(descriptions) if descriptions else ""
 
-    def extract_recipe_from_image_with_ocr(
+    async def extract_recipe_from_image_with_ocr(
         self,
         image_url: str,
         ocr_text: str
@@ -395,7 +395,7 @@ Task:
                 }
             ]
 
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -430,7 +430,7 @@ Task:
             logger.error(f"Error extracting recipe from image with OCR: {str(e)}")
             raise
 
-    def extract_recipe_from_images_with_ocr(
+    async def extract_recipe_from_images_with_ocr(
         self,
         image_urls: List[str],
         ocr_texts: List[str]
@@ -453,7 +453,7 @@ Task:
                 raise ValueError("Number of images must match number of OCR texts")
 
             if len(image_urls) == 1:
-                return self.extract_recipe_from_image_with_ocr(image_urls[0], ocr_texts[0])
+                return await self.extract_recipe_from_image_with_ocr(image_urls[0], ocr_texts[0])
 
             system_prompt = """You are a professional recipe extraction expert. Your task is to extract structured recipe data from multiple images showing different parts of the same recipe.
 
@@ -532,7 +532,7 @@ Task:
                     }
                 })
 
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},

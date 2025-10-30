@@ -2,6 +2,7 @@
 Extraction orchestrator service
 Coordinates extraction from different sources and normalization
 """
+import asyncio
 import logging
 from typing import Dict, Any, Optional, Callable, Union, List
 from supabase import Client
@@ -93,7 +94,7 @@ class ExtractionService:
                         "Normalizing recipe data"
                     )
 
-                normalized_data = self.openai_service.normalize_recipe(
+                normalized_data = await self.openai_service.normalize_recipe(
                     raw_content["text"],
                     source_type.value
                 )
@@ -224,10 +225,13 @@ class ExtractionService:
             if error_message:
                 update_data["error_message"] = error_message
 
-            self.supabase.table("extraction_jobs")\
-                .update(update_data)\
-                .eq("id", job_id)\
-                .execute()
+            # Run Supabase update in thread pool to avoid blocking event loop
+            await asyncio.to_thread(
+                lambda: self.supabase.table("extraction_jobs")
+                    .update(update_data)
+                    .eq("id", job_id)
+                    .execute()
+            )
 
         except Exception as e:
             logger.error(f"Error updating job status: {str(e)}")
