@@ -22,7 +22,7 @@ ALLOWED_IMAGE_TYPES = {
 ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "heic", "heif", "webp", "gif"}
 
 MAX_IMAGE_SIZE_MB = 50
-MAX_IMAGES_PER_EXTRACTION = 5
+MAX_IMAGES_PER_EXTRACTION = 3
 
 
 # ============================================================================

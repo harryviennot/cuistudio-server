@@ -93,7 +93,7 @@ async def submit_image_extraction(
     Upload images and submit for recipe extraction in one step.
 
     This endpoint combines image upload and extraction submission for better UX.
-    Accepts 1-5 images and returns a job ID for tracking extraction progress.
+    Accepts 1-3 images and returns a job ID for tracking extraction progress.
     """
     try:
         # Validate number of images
