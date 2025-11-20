@@ -80,6 +80,48 @@ async def create_recipe(
         )
 
 
+@router.get("/search", response_model=List[RecipeListItemResponse])
+async def search_recipes_full_text(
+    q: str = Query(..., min_length=1, description="Search query"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+    supabase: Client = Depends(get_supabase_client)
+):
+    """
+    Full-text search recipes using natural language queries.
+
+    Uses PostgreSQL full-text search with language-aware stemming and relevance ranking.
+    Results are sorted by relevance score (highest first).
+
+    Examples:
+    - "chicken pasta" - finds recipes with chicken and pasta
+    - "quick dinner" - finds quick dinner recipes
+    - "grilled vegetables" - finds grilled veggie recipes (with stemming)
+    """
+    try:
+        repo = RecipeRepository(supabase)
+        user_id = current_user["id"] if current_user else None
+
+        recipes = await repo.search_recipes(user_id, q, limit, offset)
+
+        # Batch fetch user data if authenticated
+        user_data_map = {}
+        if user_id and recipes:
+            user_repo = UserRecipeRepository(supabase)
+            recipe_ids = [r["id"] for r in recipes]
+            user_data_map = await user_repo.get_user_data_for_recipes(user_id, recipe_ids)
+
+        return [await _format_list_item_response(r, user_id, supabase, user_data_map.get(r["id"])) for r in recipes]
+
+    except Exception as e:
+        logger.error(f"Error searching recipes with full-text search: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to search recipes: {str(e)}"
+        )
+
+
 @router.get("/{recipe_id}", response_model=RecipeResponse)
 async def get_recipe(
     recipe_id: str,
@@ -463,12 +505,12 @@ async def mark_recipe_cooked(
 
 
 @router.post("/search", response_model=List[RecipeListItemResponse])
-async def search_recipes(
+async def search_recipes_ai(
     search: RecipeSearchRequest,
     current_user: Optional[dict] = Depends(get_current_user_optional),
     supabase: Client = Depends(get_supabase_client)
 ):
-    """Natural language recipe search using AI"""
+    """Natural language recipe search using AI (legacy endpoint)"""
     try:
         repo = RecipeRepository(supabase)
         openai_service = OpenAIService()

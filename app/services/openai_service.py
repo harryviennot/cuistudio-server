@@ -61,12 +61,14 @@ IMPORTANT RULES:
 7. Add relevant tags and categories
 8. If servings are not specified, make a reasonable estimate
 9. If prep/cook times are not mentioned, estimate based on the recipe complexity
-10. Return ONLY valid JSON, no markdown formatting
+10. DETECT the primary language of the recipe (en for English, fr for French)
+11. Return ONLY valid JSON, no markdown formatting
 
 Response format:
 {
     "title": "Recipe name",
     "description": "Brief description",
+    "language": "en",
     "ingredients": [
         {"name": "ingredient name", "quantity": 2, "unit": "cups", "notes": "optional notes", "group": "optional group like 'For the sauce'"}
     ],

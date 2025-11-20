@@ -101,26 +101,66 @@ class RecipeRepository(BaseRepository):
         self,
         user_id: Optional[str],
         search_query: str,
-        limit: int = 20
+        limit: int = 20,
+        offset: int = 0
     ) -> List[Dict[str, Any]]:
-        """Search recipes using full-text search"""
+        """
+        Search recipes using PostgreSQL full-text search with language-aware dictionaries.
+
+        Uses ts_rank for relevance scoring and plainto_tsquery for natural language queries.
+        Results are sorted by relevance (highest first).
+
+        Args:
+            user_id: Optional user ID to include user's own recipes
+            search_query: Natural language search query (e.g., "chicken pasta", "grilled vegetables")
+            limit: Maximum number of results to return
+            offset: Number of results to skip for pagination
+
+        Returns:
+            List of recipes sorted by relevance score
+        """
         try:
-            # Build search query
-            query = self.supabase.table(self.table_name)\
-                .select("*")\
-                .or_(f"title.ilike.%{search_query}%,description.ilike.%{search_query}%")
+            # Use RPC to call a custom function for full-text search with ranking
+            # This allows us to use ts_rank and plainto_tsquery which aren't directly
+            # available in Supabase's query builder
 
-            # Include public recipes and user's own recipes
-            if user_id:
-                query = query.or_(f"is_public.eq.true,created_by.eq.{user_id}")
-            else:
-                query = query.eq("is_public", True)
+            # Build the RPC call
+            response = self.supabase.rpc(
+                'search_recipes_full_text',
+                {
+                    'search_query': search_query,
+                    'user_id_param': user_id,
+                    'limit_param': limit,
+                    'offset_param': offset
+                }
+            ).execute()
 
-            response = query.limit(limit).execute()
             return response.data or []
         except Exception as e:
-            logger.error(f"Error searching recipes: {str(e)}")
-            raise
+            logger.error(f"Error searching recipes with full-text search: {str(e)}")
+            # Fallback to basic search if full-text search fails
+            logger.info("Falling back to basic ilike search")
+            try:
+                query = self.supabase.table(self.table_name)\
+                    .select("""
+                        id, title, description, image_url,
+                        servings, difficulty, tags, categories,
+                        prep_time_minutes, cook_time_minutes, total_time_minutes,
+                        created_by, is_public, fork_count, created_at
+                    """)\
+                    .or_(f"title.ilike.%{search_query}%,description.ilike.%{search_query}%")
+
+                # Include public recipes and user's own recipes
+                if user_id:
+                    query = query.or_(f"is_public.eq.true,created_by.eq.{user_id}")
+                else:
+                    query = query.eq("is_public", True)
+
+                response = query.limit(limit).offset(offset).execute()
+                return response.data or []
+            except Exception as fallback_error:
+                logger.error(f"Fallback search also failed: {str(fallback_error)}")
+                raise
 
     async def fork_recipe(
         self,
