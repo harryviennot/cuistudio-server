@@ -142,6 +142,7 @@ class ExtractionService:
                 "total_time_minutes": normalized_data.get("total_time_minutes"),
                 "source_type": source_type.value,
                 "source_url": source_url,  # Keep for backward compatibility
+                "image_url": source_urls[0] if source_urls else None,  # Use first extraction image
                 "created_by": user_id,
                 "is_public": True  # Default to public as specified
             }
