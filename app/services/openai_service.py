@@ -131,6 +131,21 @@ Extract and normalize into JSON format."""
             "total_time_minutes": data.get("total_time_minutes"),
         }
 
+        # Clean up ingredients: remove whitespace-only units and quantities
+        if normalized["ingredients"]:
+            for ingredient in normalized["ingredients"]:
+                # Convert whitespace-only or empty string units to None
+                if "unit" in ingredient:
+                    unit = ingredient.get("unit")
+                    if isinstance(unit, str) and not unit.strip():
+                        ingredient["unit"] = None
+
+                # Convert whitespace-only or empty string quantities to None
+                if "quantity" in ingredient:
+                    quantity = ingredient.get("quantity")
+                    if isinstance(quantity, str) and not quantity.strip():
+                        ingredient["quantity"] = None
+
         # Ensure step numbers are sequential
         if normalized["instructions"]:
             for i, instruction in enumerate(normalized["instructions"]):
