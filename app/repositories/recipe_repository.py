@@ -252,3 +252,64 @@ class RecipeRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Error incrementing fork count: {str(e)}")
             raise
+
+    async def update_rating_stats(
+        self,
+        recipe_id: str,
+        new_rating: float,
+        previous_rating: Optional[float] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Update recipe rating statistics atomically with half-star support.
+
+        Args:
+            recipe_id: Recipe to update
+            new_rating: New rating value (0.5, 1.0, 1.5, ..., 5.0)
+            previous_rating: Previous rating value if user is updating their rating
+
+        Returns:
+            Updated recipe with new rating stats
+        """
+        try:
+            recipe = await self.get_by_id(recipe_id)
+            if not recipe:
+                return None
+
+            # Get current distribution (supports half-star ratings)
+            distribution = recipe.get("rating_distribution", {
+                "0.5": 0, "1": 0, "1.5": 0, "2": 0, "2.5": 0,
+                "3": 0, "3.5": 0, "4": 0, "4.5": 0, "5": 0
+            })
+
+            # Update distribution
+            if previous_rating:
+                # User is changing their rating - remove old, add new
+                prev_key = str(previous_rating) if previous_rating % 1 != 0 else str(int(previous_rating))
+                new_key = str(new_rating) if new_rating % 1 != 0 else str(int(new_rating))
+                distribution[prev_key] = max(0, distribution.get(prev_key, 0) - 1)
+                distribution[new_key] = distribution.get(new_key, 0) + 1
+            else:
+                # New rating - just add
+                new_key = str(new_rating) if new_rating % 1 != 0 else str(int(new_rating))
+                distribution[new_key] = distribution.get(new_key, 0) + 1
+
+            # Calculate new average with half-star precision
+            total_ratings = sum(distribution.values())
+            if total_ratings == 0:
+                average_rating = None
+            else:
+                weighted_sum = sum(float(stars) * count for stars, count in distribution.items())
+                average_rating = round(weighted_sum / total_ratings, 2)
+
+            # Update recipe
+            update_data = {
+                "average_rating": average_rating,
+                "rating_count": total_ratings,
+                "rating_distribution": distribution
+            }
+
+            updated_recipe = await self.update(recipe_id, update_data)
+            return updated_recipe
+        except Exception as e:
+            logger.error(f"Error updating rating stats: {str(e)}")
+            raise

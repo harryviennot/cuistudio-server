@@ -131,3 +131,21 @@ class UserRecipeRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Error incrementing cooked count: {str(e)}")
             raise
+
+    async def get_previous_rating(
+        self,
+        user_id: str,
+        recipe_id: str
+    ) -> Optional[float]:
+        """
+        Get user's previous rating for a recipe (supports half-stars).
+
+        Returns:
+            Previous rating (0.5-5.0 in 0.5 increments) or None if no previous rating exists
+        """
+        try:
+            user_data = await self.get_by_user_and_recipe(user_id, recipe_id)
+            return user_data.get("rating") if user_data else None
+        except Exception as e:
+            logger.error(f"Error fetching previous rating: {str(e)}")
+            raise

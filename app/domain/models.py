@@ -79,6 +79,16 @@ class Recipe(BaseModel):
     original_recipe_id: Optional[str] = None  # If this is a fork
     fork_count: int = 0
 
+    # Rating aggregation (half-star support)
+    average_rating: Optional[float] = Field(None, ge=0.5, le=5.0)
+    rating_count: int = 0
+    rating_distribution: Optional[Dict[str, int]] = Field(
+        default_factory=lambda: {
+            "0.5": 0, "1": 0, "1.5": 0, "2": 0, "2.5": 0,
+            "3": 0, "3.5": 0, "4": 0, "4.5": 0, "5": 0
+        }
+    )
+
     # Privacy
     is_public: bool = True
 
@@ -102,8 +112,8 @@ class UserRecipeData(BaseModel):
     user_id: str
     recipe_id: str
 
-    # Custom ratings and timings
-    rating: Optional[int] = Field(None, ge=1, le=5)
+    # Custom ratings and timings (half-star support: 0.5, 1.0, 1.5, ..., 5.0)
+    rating: Optional[float] = Field(None, ge=0.5, le=5.0)
     custom_prep_time_minutes: Optional[int] = None
     custom_cook_time_minutes: Optional[int] = None
     custom_difficulty: Optional[DifficultyLevel] = None

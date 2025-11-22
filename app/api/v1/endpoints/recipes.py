@@ -1,7 +1,7 @@
 """
 Recipe endpoints
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from supabase import Client
 from typing import List, Optional, Dict, Any
 import logging
@@ -16,6 +16,9 @@ from app.api.v1.schemas.recipe import (
     RecipeUpdateRequest,
     RecipeForkRequest,
     RecipeRatingRequest,
+    RecipeTimingsUpdateRequest,
+    RecipeTimingsUpdateResponse,
+    RecipeRatingUpdateResponse,
     UserRecipeDataUpdate,
     RecipeSearchRequest,
     RecipeResponse,
@@ -125,11 +128,14 @@ async def search_recipes_full_text(
 @router.get("/{recipe_id}", response_model=RecipeResponse)
 async def get_recipe(
     recipe_id: str,
+    request: Request,
     current_user: Optional[dict] = Depends(get_current_user_optional),
     supabase: Client = Depends(get_supabase_client)
 ):
     """Get a recipe by ID"""
     try:
+        from app.core.database import get_supabase_user_client
+
         repo = RecipeRepository(supabase)
         recipe = await repo.get_with_contributors(recipe_id)
 
@@ -163,7 +169,9 @@ async def get_recipe(
                         detail="This recipe is private"
                     )
 
-        return await _format_recipe_response(recipe, user_id, supabase)
+        # Use user client with JWT token for RLS-aware operations
+        user_client = get_supabase_user_client(request) if current_user else supabase
+        return await _format_recipe_response(recipe, user_id, user_client)
 
     except HTTPException:
         raise
@@ -595,6 +603,10 @@ async def _format_recipe_response(
         created_by=recipe["created_by"],
         original_recipe_id=recipe.get("original_recipe_id"),
         fork_count=recipe.get("fork_count", 0),
+        # Rating aggregation fields
+        average_rating=recipe.get("average_rating"),
+        rating_count=recipe.get("rating_count", 0),
+        rating_distribution=recipe.get("rating_distribution"),
         is_public=recipe["is_public"],
         contributors=contributor_responses,
         user_data=user_data,
@@ -656,3 +668,82 @@ async def _format_list_item_response(
         is_favorite=is_favorite,
         created_at=recipe["created_at"]
     )
+
+
+# ============= NEW ENDPOINTS: Timings & Rating =============
+
+
+@router.patch("/{recipe_id}/timings", response_model=RecipeTimingsUpdateResponse)
+async def update_recipe_timings(
+    recipe_id: str,
+    data: RecipeTimingsUpdateRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Update recipe timings with smart ownership logic.
+
+    - If you OWN the recipe: Updates base recipe (visible to all users)
+    - If you DON'T own it: Updates your personal custom timings
+
+    Returns which type of update was performed.
+    """
+    from app.services.recipe_service import RecipeService
+    from app.core.database import get_supabase_admin_client
+
+    # Use admin client to bypass RLS (we already validated user auth)
+    service = RecipeService(get_supabase_admin_client())
+
+    try:
+        result = await service.update_recipe_timings(
+            recipe_id=recipe_id,
+            user_id=current_user["id"],
+            prep_time_minutes=data.prep_time_minutes,
+            cook_time_minutes=data.cook_time_minutes
+        )
+
+        return RecipeTimingsUpdateResponse(**result)
+
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error updating recipe timings: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to update recipe timings")
+
+
+@router.patch("/{recipe_id}/rating", response_model=RecipeRatingUpdateResponse)
+async def update_recipe_rating(
+    recipe_id: str,
+    data: RecipeRatingRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Rate a recipe with half-star precision (0.5, 1.0, 1.5, ..., 5.0).
+
+    Automatically updates:
+    - Your personal rating
+    - Recipe's average rating
+    - Recipe's rating count
+    - Recipe's rating distribution
+
+    Returns both your rating and the updated recipe stats.
+    """
+    from app.services.recipe_service import RecipeService
+    from app.core.database import get_supabase_admin_client
+
+    # Use admin client to bypass RLS (we already validated user auth)
+    service = RecipeService(get_supabase_admin_client())
+
+    try:
+        result = await service.update_recipe_rating(
+            recipe_id=recipe_id,
+            user_id=current_user["id"],
+            rating=data.rating
+        )
+
+        return RecipeRatingUpdateResponse(**result)
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error updating recipe rating: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to update recipe rating")
