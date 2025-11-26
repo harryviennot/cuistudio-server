@@ -710,7 +710,7 @@ async def update_recipe_timings(
         raise HTTPException(status_code=500, detail="Failed to update recipe timings")
 
 
-@router.patch("/{recipe_id}/rating", response_model=RecipeRatingUpdateResponse)
+@router.patch("/{recipe_id}/rating", response_model=RecipeResponse)
 async def update_recipe_rating(
     recipe_id: str,
     data: RecipeRatingRequest,
@@ -725,22 +725,32 @@ async def update_recipe_rating(
     - Recipe's rating count
     - Recipe's rating distribution
 
-    Returns both your rating and the updated recipe stats.
+    Returns the complete updated recipe with your rating and updated aggregate stats.
     """
     from app.services.recipe_service import RecipeService
+    from app.repositories.recipe_repository import RecipeRepository
     from app.core.database import get_supabase_admin_client
 
     # Use admin client to bypass RLS (we already validated user auth)
-    service = RecipeService(get_supabase_admin_client())
+    supabase = get_supabase_admin_client()
+    service = RecipeService(supabase)
+    repo = RecipeRepository(supabase)
 
     try:
-        result = await service.update_recipe_rating(
+        # Update the rating
+        await service.update_recipe_rating(
             recipe_id=recipe_id,
             user_id=current_user["id"],
             rating=data.rating
         )
 
-        return RecipeRatingUpdateResponse(**result)
+        # Fetch the updated recipe
+        updated_recipe = await repo.get_by_id(recipe_id)
+        if not updated_recipe:
+            raise HTTPException(status_code=404, detail="Recipe not found")
+
+        # Return formatted response with user data
+        return await _format_recipe_response(updated_recipe, current_user["id"], supabase)
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

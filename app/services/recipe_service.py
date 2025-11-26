@@ -111,20 +111,25 @@ class RecipeService:
         recipe_id: str,
         user_id: str,
         rating: float
-    ) -> Dict[str, Any]:
+    ) -> None:
         """
         Update recipe rating with automatic aggregation.
 
         Updates user's personal rating and recalculates recipe average rating,
         rating count, and distribution.
 
+        This method updates both user_recipe_data and recipes tables.
+        Note: Supabase REST API doesn't support explicit transactions,
+        but operations are ordered to minimize inconsistency risk.
+
         Args:
             recipe_id: Recipe to rate
             user_id: Current user ID
             rating: Rating value (0.5, 1.0, 1.5, ..., 5.0)
 
-        Returns:
-            Dictionary with user rating and recipe aggregate stats
+        Raises:
+            ValueError: If rating is invalid
+            Exception: If update fails
         """
         try:
             # Validate rating is in half-star increments
@@ -133,17 +138,22 @@ class RecipeService:
             if (rating * 2) != int(rating * 2):
                 raise ValueError("Rating must be in half-star increments (0.5, 1.0, 1.5, ...)")
 
-            # Get previous rating if exists
+            # Get previous rating if exists (needed for aggregate calculation)
             previous_rating = await self.user_recipe_repo.get_previous_rating(user_id, recipe_id)
 
-            # Update user's personal rating
+            # Update user's personal rating first
             user_data = await self.user_recipe_repo.upsert_user_data(
                 user_id,
                 recipe_id,
                 {"rating": rating}
             )
 
+            if not user_data:
+                raise ValueError(f"Failed to update user rating for recipe {recipe_id}")
+
             # Update recipe aggregate stats
+            # If this fails, user rating is already saved but aggregates will be stale
+            # This is acceptable as aggregates can be recalculated
             updated_recipe = await self.recipe_repo.update_rating_stats(
                 recipe_id,
                 rating,
@@ -151,15 +161,8 @@ class RecipeService:
             )
 
             if not updated_recipe:
+                logger.error(f"Failed to update rating stats for recipe {recipe_id} after user rating was saved")
                 raise ValueError(f"Failed to update rating stats for recipe {recipe_id}")
-
-            return {
-                "user_rating": rating,
-                "previous_user_rating": previous_rating,
-                "recipe_average_rating": updated_recipe.get("average_rating"),
-                "recipe_rating_count": updated_recipe.get("rating_count"),
-                "recipe_rating_distribution": updated_recipe.get("rating_distribution")
-            }
 
         except Exception as e:
             logger.error(f"Error updating recipe rating: {str(e)}")
