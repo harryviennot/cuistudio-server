@@ -125,6 +125,9 @@ class RecipeResponse(BaseModel):
     rating_count: int = 0
     rating_distribution: Optional[dict] = None
 
+    # Cooking count aggregation
+    total_times_cooked: int = 0
+
     is_public: bool
 
     # Additional info
@@ -170,6 +173,9 @@ class RecipeListItemResponse(BaseModel):
     average_rating: Optional[float] = None
     rating_count: int = 0
 
+    # Cooking count aggregation
+    total_times_cooked: int = 0
+
     # User data if authenticated
     user_rating: Optional[float] = None
     is_favorite: bool = False
@@ -192,3 +198,24 @@ class RecipeRatingUpdateResponse(BaseModel):
     recipe_average_rating: Optional[float] = None
     recipe_rating_count: int
     recipe_rating_distribution: Optional[dict] = None
+
+
+class CookingStatsResponse(BaseModel):
+    """Cooking statistics for a recipe in a time window"""
+    cook_count: int
+    unique_users: int
+    time_window_days: int
+
+
+class TrendingRecipeResponse(RecipeResponse):
+    """Trending recipe with cooking statistics"""
+    cooking_stats: CookingStatsResponse
+
+
+class UserCookingHistoryItemResponse(BaseModel):
+    """User's cooking history for a single recipe"""
+    recipe_id: str
+    recipe_title: str
+    times_cooked: int
+    last_cooked_at: datetime
+    first_cooked_at: datetime

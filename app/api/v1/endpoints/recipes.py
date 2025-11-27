@@ -24,7 +24,9 @@ from app.api.v1.schemas.recipe import (
     RecipeResponse,
     RecipeListItemResponse,
     UserRecipeDataResponse,
-    RecipeContributorResponse
+    RecipeContributorResponse,
+    TrendingRecipeResponse,
+    UserCookingHistoryItemResponse
 )
 from app.api.v1.schemas.common import MessageResponse
 from app.domain.models import RecipeTimings, Ingredient, Instruction
@@ -757,3 +759,68 @@ async def update_recipe_rating(
     except Exception as e:
         logger.error(f"Error updating recipe rating: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to update recipe rating")
+
+
+@router.get("/trending", response_model=List[TrendingRecipeResponse])
+async def get_trending_recipes(
+    time_window_days: int = Query(7, ge=1, le=365, description="Number of days to look back (default: 7 for 'this week')"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    supabase: Client = Depends(get_supabase_client)
+):
+    """
+    Get trending recipes based on cooking frequency in a time window.
+
+    This endpoint returns recipes ordered by how many times they've been cooked
+    in the specified time window. Great for discovering popular recipes!
+
+    Examples:
+    - time_window_days=7: Most cooked recipes this week
+    - time_window_days=30: Most cooked recipes this month
+    - time_window_days=1: Trending today
+
+    Returns recipes with cooking statistics including:
+    - cook_count: Number of times cooked in the time window
+    - unique_users: Number of unique users who cooked it
+    """
+    try:
+        repo = RecipeRepository(supabase)
+        trending_recipes = await repo.get_trending_recipes(
+            time_window_days=time_window_days,
+            limit=limit,
+            offset=offset
+        )
+        return trending_recipes
+    except Exception as e:
+        logger.error(f"Error fetching trending recipes: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch trending recipes")
+
+
+@router.get("/cooking-history", response_model=List[UserCookingHistoryItemResponse])
+async def get_cooking_history(
+    time_window_days: int = Query(30, ge=1, le=365, description="Number of days to look back (default: 30)"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client)
+):
+    """
+    Get the current user's cooking history in a time window.
+
+    Returns recipes the user has cooked recently with statistics:
+    - times_cooked: How many times they cooked it in the time window
+    - last_cooked_at: When they last cooked it
+    - first_cooked_at: When they first cooked it (in this time window)
+    """
+    try:
+        repo = RecipeRepository(supabase)
+        cooking_history = await repo.get_user_cooking_history(
+            user_id=current_user["id"],
+            time_window_days=time_window_days,
+            limit=limit,
+            offset=offset
+        )
+        return cooking_history
+    except Exception as e:
+        logger.error(f"Error fetching cooking history: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch cooking history")

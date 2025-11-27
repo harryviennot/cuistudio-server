@@ -56,7 +56,9 @@ class RecipeRepository(BaseRepository):
                     id, title, description, image_url,
                     servings, difficulty, tags, categories,
                     prep_time_minutes, cook_time_minutes, total_time_minutes,
-                    created_by, is_public, fork_count, created_at
+                    created_by, is_public, fork_count,
+                    average_rating, rating_count, total_times_cooked,
+                    created_at
                 """)\
                 .eq("created_by", user_id)\
                 .order("created_at", desc=True)\
@@ -146,7 +148,9 @@ class RecipeRepository(BaseRepository):
                         id, title, description, image_url,
                         servings, difficulty, tags, categories,
                         prep_time_minutes, cook_time_minutes, total_time_minutes,
-                        created_by, is_public, fork_count, created_at
+                        created_by, is_public, fork_count,
+                        average_rating, rating_count, total_times_cooked,
+                        created_at
                     """)\
                     .or_(f"title.ilike.%{search_query}%,description.ilike.%{search_query}%")
 
@@ -312,4 +316,109 @@ class RecipeRepository(BaseRepository):
             return updated_recipe
         except Exception as e:
             logger.error(f"Error updating rating stats: {str(e)}")
+            raise
+
+    async def get_trending_recipes(
+        self,
+        time_window_days: int = 7,
+        limit: int = 20,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        Get trending recipes based on cooking frequency in a time window.
+
+        Args:
+            time_window_days: Number of days to look back (default: 7 for "this week")
+            limit: Maximum number of recipes to return
+            offset: Number of results to skip for pagination
+
+        Returns:
+            List of recipes with cooking statistics, ordered by popularity
+        """
+        try:
+            # Use the database function for optimized trending query
+            response = self.supabase.rpc(
+                'get_trending_recipes',
+                {
+                    'time_window_days': time_window_days,
+                    'limit_param': limit,
+                    'offset_param': offset
+                }
+            ).execute()
+
+            trending_recipe_ids = response.data or []
+
+            if not trending_recipe_ids:
+                return []
+
+            # Fetch full recipe details for trending recipes
+            recipe_ids = [item['recipe_id'] for item in trending_recipe_ids]
+
+            recipes_response = self.supabase.table(self.table_name)\
+                .select("*")\
+                .in_("id", recipe_ids)\
+                .execute()
+
+            recipes = recipes_response.data or []
+
+            # Merge cooking stats with recipe data
+            recipes_with_stats = []
+            for recipe in recipes:
+                # Find corresponding stats
+                stats = next(
+                    (item for item in trending_recipe_ids if item['recipe_id'] == recipe['id']),
+                    None
+                )
+                if stats:
+                    recipe['cooking_stats'] = {
+                        'cook_count': stats['cook_count'],
+                        'unique_users': stats['unique_users'],
+                        'time_window_days': time_window_days
+                    }
+                    recipes_with_stats.append(recipe)
+
+            # Sort by cook count (maintain trending order)
+            recipes_with_stats.sort(
+                key=lambda x: x['cooking_stats']['cook_count'],
+                reverse=True
+            )
+
+            return recipes_with_stats
+        except Exception as e:
+            logger.error(f"Error fetching trending recipes: {str(e)}")
+            raise
+
+    async def get_user_cooking_history(
+        self,
+        user_id: str,
+        time_window_days: int = 30,
+        limit: int = 20,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        Get a user's cooking history in a time window.
+
+        Args:
+            user_id: User ID to get history for
+            time_window_days: Number of days to look back (default: 30)
+            limit: Maximum number of recipes to return
+            offset: Number of results to skip for pagination
+
+        Returns:
+            List of recipes the user has cooked with cooking statistics
+        """
+        try:
+            response = self.supabase.rpc(
+                'get_user_cooking_history',
+                {
+                    'user_id_param': user_id,
+                    'time_window_days': time_window_days,
+                    'limit_param': limit,
+                    'offset_param': offset
+                }
+            ).execute()
+
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Error fetching user cooking history: {str(e)}")
             raise

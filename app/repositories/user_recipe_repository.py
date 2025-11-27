@@ -4,6 +4,7 @@ User recipe data repository
 from typing import Optional, Dict, Any, List
 from supabase import Client
 import logging
+from datetime import datetime, timezone
 
 from app.repositories.base import BaseRepository
 
@@ -112,12 +113,31 @@ class UserRecipeRepository(BaseRepository):
         user_id: str,
         recipe_id: str
     ) -> Dict[str, Any]:
-        """Increment the times cooked counter"""
+        """
+        Increment the times cooked counter and record cooking event.
+
+        This performs two operations:
+        1. Updates user_recipe_data.times_cooked (personal count)
+        2. Inserts a cooking event for time-based analytics
+
+        The recipes.total_times_cooked is updated automatically by database trigger.
+        """
         try:
             # Get current data
             current = await self.get_by_user_and_recipe(user_id, recipe_id)
 
             times_cooked = (current["times_cooked"] if current else 0) + 1
+            now = datetime.now(timezone.utc).isoformat()
+
+            # Insert cooking event for time-based analytics
+            # This enables queries like "most cooked this week"
+            self.supabase.table("recipe_cooking_events")\
+                .insert({
+                    "user_id": user_id,
+                    "recipe_id": recipe_id,
+                    "cooked_at": now
+                })\
+                .execute()
 
             # Upsert with incremented count
             return await self.upsert_user_data(
@@ -125,7 +145,7 @@ class UserRecipeRepository(BaseRepository):
                 recipe_id,
                 {
                     "times_cooked": times_cooked,
-                    "last_cooked_at": "now()"
+                    "last_cooked_at": now
                 }
             )
         except Exception as e:
