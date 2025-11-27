@@ -5,7 +5,8 @@ to extract platform and video ID for duplicate detection.
 """
 
 import re
-from typing import Optional, Tuple
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from typing import Optional, Tuple, Set
 from dataclasses import dataclass
 from enum import Enum
 
@@ -23,6 +24,42 @@ class ParsedVideoURL:
     platform: VideoPlatform
     video_id: str
     original_url: str
+    clean_url: str  # URL with tracking params removed
+
+
+# Query parameters to strip from URLs (tracking/analytics params)
+TRACKING_PARAMS: Set[str] = {
+    # TikTok tracking params
+    'is_from_webapp',
+    'sender_device',
+    'web_id',
+    '_r',
+    '_t',
+    'refer',
+    'referer',
+    'share_source',
+    'share_type',
+    'share_app_id',
+    'share_author_id',
+    'share_item_id',
+    # Instagram tracking params
+    'igsh',
+    'igshid',
+    'utm_source',
+    'utm_medium',
+    'utm_campaign',
+    # YouTube tracking params
+    'si',
+    'feature',
+    'pp',
+    # Common tracking params
+    'utm_content',
+    'utm_term',
+    'fbclid',
+    'gclid',
+    'ref',
+    'source',
+}
 
 
 class VideoURLParser:
@@ -72,6 +109,32 @@ class VideoURLParser:
     ]
 
     @classmethod
+    def clean_url(cls, url: str) -> str:
+        """
+        Remove ALL query parameters from video URLs.
+
+        For video platforms, the video ID is always in the URL path,
+        never in query params. All query params are tracking/analytics.
+
+        Args:
+            url: The URL to clean
+
+        Returns:
+            URL with all query parameters removed
+        """
+        if not url:
+            return url
+
+        try:
+            parsed = urlparse(url)
+            # Remove all query params and fragments for video URLs
+            clean_parsed = parsed._replace(query='', fragment='')
+            return urlunparse(clean_parsed)
+        except Exception:
+            # If parsing fails, return original URL
+            return url
+
+    @classmethod
     def parse(cls, url: str) -> Optional[ParsedVideoURL]:
         """
         Parse a video URL to extract platform and video ID.
@@ -97,7 +160,8 @@ class VideoURLParser:
                     return ParsedVideoURL(
                         platform=platform,
                         video_id=video_id,
-                        original_url=url
+                        original_url=url,
+                        clean_url=cls.clean_url(url)
                     )
 
         return None

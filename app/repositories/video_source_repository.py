@@ -6,6 +6,7 @@ from supabase import Client
 import logging
 
 from app.repositories.base import BaseRepository
+from app.services.video_url_parser import VideoURLParser
 
 logger = logging.getLogger(__name__)
 
@@ -161,11 +162,14 @@ class VideoSourceRepository(BaseRepository):
             view_count_int = int(view_count) if view_count is not None else None
             like_count_int = int(like_count) if like_count is not None else None
 
+            # Clean URL to remove tracking parameters
+            clean_original_url = VideoURLParser.clean_url(original_url)
+
             data = {
                 "platform": platform,
                 "platform_video_id": platform_video_id,
                 "recipe_id": recipe_id,
-                "original_url": original_url,
+                "original_url": clean_original_url,
                 "canonical_url": canonical_url,
                 "title": title,
                 "description": description,

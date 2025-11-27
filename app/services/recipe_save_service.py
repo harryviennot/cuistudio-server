@@ -3,6 +3,7 @@ Recipe Save Service
 Handles the unified save logic for all extraction types.
 This separates the "save" action from the "extract" action.
 """
+import asyncio
 import logging
 from typing import Dict, Any, Optional
 from supabase import Client
@@ -13,6 +14,7 @@ from app.repositories.collection_repository import CollectionRepository
 from app.repositories.collection_recipe_repository import CollectionRecipeRepository
 from app.repositories.video_source_repository import VideoSourceRepository
 from app.repositories.video_creator_repository import VideoCreatorRepository
+from app.services.video_url_parser import VideoURLParser
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +255,11 @@ class RecipeSaveService:
             # User can change privacy settings later if desired
             is_public = True
 
+            # Clean source URL for video extractions (remove tracking params)
+            clean_source_url = source_url
+            if source_type == SourceType.VIDEO and source_url:
+                clean_source_url = VideoURLParser.clean_url(source_url)
+
             # Prepare recipe data - as DRAFT
             recipe_data = {
                 "title": extracted_data["title"],
@@ -267,7 +274,7 @@ class RecipeSaveService:
                 "cook_time_minutes": extracted_data.get("cook_time_minutes"),
                 "total_time_minutes": extracted_data.get("total_time_minutes"),
                 "source_type": source_type.value,
-                "source_url": source_url,
+                "source_url": clean_source_url,
                 "image_url": extracted_data.get("image_url"),
                 "image_source": image_source,
                 "created_by": user_id,
@@ -287,13 +294,14 @@ class RecipeSaveService:
                 "order": 0
             }).execute()
 
-            # Handle video-specific records
+            # Handle video-specific records in background (fire-and-forget)
+            # This doesn't block the response - video metadata is supplementary
             if source_type == SourceType.VIDEO and video_metadata:
-                await self._create_video_records(
+                asyncio.create_task(self._create_video_records_background(
                     recipe_id=recipe_id,
                     video_metadata=video_metadata,
                     source_url=source_url
-                )
+                ))
 
             # Update job with recipe_id if provided
             if job_id:
@@ -357,6 +365,22 @@ class RecipeSaveService:
         except Exception as e:
             logger.error(f"Error deleting draft recipe {recipe_id}: {str(e)}")
             raise
+
+    async def _create_video_records_background(
+        self,
+        recipe_id: str,
+        video_metadata: Dict[str, Any],
+        source_url: Optional[str]
+    ):
+        """
+        Background wrapper for video records creation.
+        Catches all exceptions to prevent unhandled errors in fire-and-forget tasks.
+        """
+        try:
+            await self._create_video_records(recipe_id, video_metadata, source_url)
+        except Exception as e:
+            # Log but don't propagate - this is a background task
+            logger.error(f"Background video records creation failed for recipe {recipe_id}: {str(e)}")
 
     async def _create_video_records(
         self,

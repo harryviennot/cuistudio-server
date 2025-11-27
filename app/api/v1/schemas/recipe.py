@@ -134,6 +134,9 @@ class RecipeResponse(BaseModel):
     contributors: List[RecipeContributorResponse] = Field(default_factory=list)
     user_data: Optional['UserRecipeDataResponse'] = None  # If user is authenticated
 
+    # Video source info (only for video-extracted recipes)
+    video_platform: Optional[str] = None  # tiktok, youtube, instagram
+
     created_at: datetime
     updated_at: datetime
 
@@ -179,6 +182,9 @@ class RecipeListItemResponse(BaseModel):
     # User data if authenticated
     user_rating: Optional[float] = None
     is_favorite: bool = False
+
+    # Video source info (only for video-extracted recipes)
+    video_platform: Optional[str] = None  # tiktok, youtube, instagram
 
     created_at: datetime
 

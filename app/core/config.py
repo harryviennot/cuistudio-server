@@ -41,6 +41,13 @@ class Settings(BaseSettings):
 
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 60
+    EXTRACTION_RATE_LIMIT_PER_MINUTE: int = 10  # Stricter limit for heavy extraction operations
+
+    # Whisper Model
+    WHISPER_MODEL: str = "base"  # Options: tiny, base, small, medium, large
+
+    # Uvicorn Workers (0 = auto-calculate based on CPU cores)
+    UVICORN_WORKERS: int = 0
 
     # Logging
     LOG_LEVEL: str = "INFO"

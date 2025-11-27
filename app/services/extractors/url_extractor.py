@@ -3,12 +3,15 @@ URL extractor for web scraping recipe websites
 """
 import logging
 from typing import Dict, Any
-import requests
+import httpx
 from bs4 import BeautifulSoup
 
 from app.services.extractors.base_extractor import BaseExtractor
 
 logger = logging.getLogger(__name__)
+
+# Default timeout for URL fetching (seconds)
+URL_FETCH_TIMEOUT = 30.0
 
 
 class URLExtractor(BaseExtractor):
@@ -27,11 +30,16 @@ class URLExtractor(BaseExtractor):
         try:
             self.update_progress(20, "Fetching webpage")
 
-            # Fetch the webpage
-            response = requests.get(source, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            })
-            response.raise_for_status()
+            # Fetch the webpage using async httpx
+            async with httpx.AsyncClient(timeout=URL_FETCH_TIMEOUT) as client:
+                response = await client.get(
+                    source,
+                    headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    },
+                    follow_redirects=True
+                )
+                response.raise_for_status()
 
             self.update_progress(50, "Parsing HTML content")
 

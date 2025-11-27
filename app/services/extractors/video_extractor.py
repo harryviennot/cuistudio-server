@@ -6,9 +6,12 @@ are wrapped in asyncio.to_thread() to prevent blocking the event loop.
 This allows SSE progress events to be sent in real-time.
 """
 import os
+import shutil
 import logging
 import asyncio
-from typing import Dict, Any
+from functools import lru_cache
+from pathlib import Path
+from typing import Dict, Any, List
 import yt_dlp
 import whisper
 from moviepy.video.io.VideoFileClip import VideoFileClip
@@ -21,13 +24,65 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+@lru_cache(maxsize=1)
+def get_whisper_model(model_name: str = "base"):
+    """
+    Load and cache Whisper model. Only loaded once per process.
+
+    Args:
+        model_name: Model size - tiny, base, small, medium, large
+
+    Returns:
+        Loaded Whisper model
+    """
+    logger.info(f"Loading Whisper model: {model_name}")
+    return whisper.load_model(model_name)
+
+
 class VideoExtractor(BaseExtractor):
     """Extract recipes from video URLs (TikTok, Reels, Shorts)"""
 
     def __init__(self, progress_callback=None):
         super().__init__(progress_callback)
         self.download_dir = "temp/videos"
+        self.frames_dir = "temp/frames"
         os.makedirs(self.download_dir, exist_ok=True)
+        os.makedirs(self.frames_dir, exist_ok=True)
+        # Track temp files for cleanup
+        self._temp_files: List[Path] = []
+        self._temp_dirs: List[Path] = []
+
+    def _track_temp_file(self, path: str) -> str:
+        """Track a temp file for cleanup after extraction."""
+        self._temp_files.append(Path(path))
+        return path
+
+    def _track_temp_dir(self, path: str) -> str:
+        """Track a temp directory for cleanup after extraction."""
+        self._temp_dirs.append(Path(path))
+        return path
+
+    def _cleanup_temp_files(self):
+        """Remove all tracked temp files and directories."""
+        for file_path in self._temp_files:
+            try:
+                if file_path.exists():
+                    file_path.unlink()
+                    logger.debug(f"Cleaned up temp file: {file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup temp file {file_path}: {e}")
+
+        for dir_path in self._temp_dirs:
+            try:
+                if dir_path.exists():
+                    shutil.rmtree(dir_path)
+                    logger.debug(f"Cleaned up temp dir: {dir_path}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup temp dir {dir_path}: {e}")
+
+        self._temp_files.clear()
+        self._temp_dirs.clear()
+        logger.info("Temp file cleanup completed")
 
     async def extract(self, source: str, **kwargs) -> Dict[str, Any]:
         """
@@ -40,24 +95,38 @@ class VideoExtractor(BaseExtractor):
             Dict containing transcript, ocr_text, description, video metadata, and video_path
         """
         try:
-            self.update_progress(10, "Downloading video")
+            self.update_progress(5, "Downloading video")
             video_path, video_metadata = await self._download_video(source)
+            # Track video file for cleanup
+            self._track_temp_file(video_path)
 
             description = video_metadata.get("description", "")
 
-            self.update_progress(30, "Extracting audio")
-            audio_path = await self._extract_audio(video_path)
+            # Run audio extraction and frame extraction in parallel
+            # These are independent operations on the same video file
+            self.update_progress(20, "Processing video (audio + frames)")
 
-            self.update_progress(50, "Transcribing audio")
-            transcript = await self._transcribe_audio(audio_path)
+            audio_task = asyncio.create_task(self._extract_audio(video_path))
+            frames_task = asyncio.create_task(self._extract_key_frames(video_path))
 
-            self.update_progress(70, "Extracting frames for OCR")
-            frames = await self._extract_key_frames(video_path)
+            # Wait for both to complete
+            audio_path, frames = await asyncio.gather(audio_task, frames_task)
 
-            self.update_progress(85, "Running OCR on frames")
-            ocr_text = await self._run_ocr(frames)
+            # Track files for cleanup
+            self._track_temp_file(audio_path)
+            for frame_path in frames:
+                self._track_temp_file(frame_path)
 
-            self.update_progress(95, "Combining extracted content")
+            # Run transcription and OCR in parallel - these are CPU-intensive but independent
+            self.update_progress(40, "Analyzing content (transcription + OCR)")
+
+            transcript_task = asyncio.create_task(self._transcribe_audio(audio_path))
+            ocr_task = asyncio.create_task(self._run_ocr(frames))
+
+            # Wait for both to complete
+            transcript, ocr_text = await asyncio.gather(transcript_task, ocr_task)
+
+            self.update_progress(90, "Combining extracted content")
 
             # Combine all extracted text
             combined_text = f"""
@@ -100,6 +169,9 @@ Text from Video (OCR):
         except Exception as e:
             logger.error(f"Error extracting from video: {str(e)}")
             raise
+        finally:
+            # Always cleanup temp files, even on error
+            self._cleanup_temp_files()
 
     async def _download_video(self, url: str) -> tuple[str, Dict[str, Any]]:
         """
@@ -202,11 +274,11 @@ Text from Video (OCR):
             raise
 
     async def _transcribe_audio(self, audio_path: str) -> str:
-        """Transcribe audio using OpenAI Whisper"""
+        """Transcribe audio using OpenAI Whisper with cached model"""
         def _sync_transcribe():
             """Synchronous transcription - runs in thread pool (CPU-intensive)"""
-            # Load Whisper model (using base model for speed)
-            model = whisper.load_model("base")
+            # Use cached Whisper model (loaded once per process)
+            model = get_whisper_model(settings.WHISPER_MODEL)
             # Transcribe
             result = model.transcribe(audio_path)
             return result["text"]

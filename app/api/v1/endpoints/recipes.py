@@ -675,6 +675,15 @@ async def _format_recipe_response(
             total_time_minutes=recipe.get("total_time_minutes")
         )
 
+    # Get video platform if recipe is from a video
+    video_platform = None
+    if recipe.get("source_type") == "video":
+        from app.repositories.video_source_repository import VideoSourceRepository
+        video_repo = VideoSourceRepository(supabase)
+        video_source = await video_repo.get_by_recipe(recipe["id"])
+        if video_source:
+            video_platform = video_source.get("platform")
+
     return RecipeResponse(
         id=recipe["id"],
         title=recipe["title"],
@@ -699,6 +708,7 @@ async def _format_recipe_response(
         is_public=recipe["is_public"],
         contributors=contributor_responses,
         user_data=user_data,
+        video_platform=video_platform,
         created_at=recipe["created_at"],
         updated_at=recipe["updated_at"]
     )
@@ -740,6 +750,15 @@ async def _format_list_item_response(
             total_time_minutes=recipe.get("total_time_minutes")
         )
 
+    # Get video platform if recipe is from a video
+    video_platform = None
+    if recipe.get("source_type") == "video":
+        from app.repositories.video_source_repository import VideoSourceRepository
+        video_repo = VideoSourceRepository(supabase)
+        video_source = await video_repo.get_by_recipe(recipe["id"])
+        if video_source:
+            video_platform = video_source.get("platform")
+
     return RecipeListItemResponse(
         id=recipe["id"],
         title=recipe["title"],
@@ -755,6 +774,7 @@ async def _format_list_item_response(
         fork_count=recipe.get("fork_count", 0),
         user_rating=user_rating,
         is_favorite=is_favorite,
+        video_platform=video_platform,
         created_at=recipe["created_at"]
     )
 
