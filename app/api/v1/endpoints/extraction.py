@@ -37,6 +37,15 @@ async def submit_extraction(
 ):
     """
     Submit content for recipe extraction.
+
+    This endpoint extracts recipe data WITHOUT saving to the database.
+    The extracted data is stored in the job and returned when complete.
+    Use POST /recipes/save to persist the recipe after preview.
+
+    For video URLs (TikTok, YouTube Shorts, Instagram Reels), duplicate
+    detection is performed first. If the video was already extracted,
+    the existing recipe data is returned with existing_recipe_id set.
+
     Returns a job ID for tracking progress.
     """
     try:
@@ -60,9 +69,10 @@ async def submit_extraction(
             )
 
         # Run extraction in background (use admin_client for background tasks)
+        # Use the new extract_recipe method that doesn't save to DB
         admin_extraction_service = ExtractionService(admin_client)
         background_tasks.add_task(
-            admin_extraction_service.extract_and_create_recipe,
+            admin_extraction_service.extract_recipe,
             current_user["id"],
             extraction_request.source_type,
             source,
@@ -129,9 +139,10 @@ async def submit_image_extraction(
         )
 
         # Step 3: Run extraction in background (use admin_client for background tasks)
+        # Use extract_recipe to only extract without saving - user must confirm via /recipes/save
         admin_extraction_service = ExtractionService(admin_client)
         background_tasks.add_task(
-            admin_extraction_service.extract_and_create_recipe,
+            admin_extraction_service.extract_recipe,
             current_user["id"],
             SourceType.PHOTO,
             image_urls,  # Pass list of URLs
