@@ -14,6 +14,7 @@ from app.services.extractors.voice_extractor import VoiceExtractor
 from app.services.extractors.url_extractor import URLExtractor
 from app.services.extractors.paste_extractor import PasteExtractor
 from app.services.openai_service import OpenAIService
+from app.services.flux_service import FluxService
 from app.repositories.recipe_repository import RecipeRepository
 from app.core.events import get_event_broadcaster
 
@@ -26,6 +27,7 @@ class ExtractionService:
     def __init__(self, supabase: Client):
         self.supabase = supabase
         self.openai_service = OpenAIService()
+        self.flux_service = FluxService(supabase)
         self.recipe_repo = RecipeRepository(supabase)
 
     async def extract_and_create_recipe(
@@ -117,16 +119,45 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.PROCESSING,
                     80,
-                    "Saving recipe"
+                    "Preparing recipe data"
                 )
             elif progress_callback:
                 # Only use progress_callback if no job_id (backward compatibility)
-                progress_callback(80, "Saving recipe")
+                progress_callback(80, "Preparing recipe data")
 
             # Get source URLs (could be single or multiple)
             # For backwards compatibility with non-photo sources
             source_url = raw_content.get("source_url") if "source_url" in raw_content else None
             source_urls = raw_content.get("source_urls", [source_url] if source_url else [])
+
+            # Determine initial image_url (from extraction source)
+            initial_image_url = source_urls[0] if source_urls else None
+
+            # Step 4: Generate AI image for non-URL sources (synchronous, before DB save)
+            # URL sources already have images from scraping
+            if source_type != SourceType.URL:
+                if job_id:
+                    await self._update_job_status(
+                        job_id,
+                        ExtractionStatus.PROCESSING,
+                        90,
+                        "Generating AI image"
+                    )
+                elif progress_callback:
+                    progress_callback(90, "Generating AI image")
+
+                # Generate image synchronously (recipe_id will be auto-generated)
+                generated_image_url = await self.flux_service.generate_recipe_image(
+                    normalized_data,
+                    user_id
+                )
+
+                # Use generated image if successful, otherwise keep source image
+                if generated_image_url:
+                    initial_image_url = generated_image_url
+                    logger.info(f"Generated AI image for recipe: {generated_image_url}")
+                else:
+                    logger.warning("Image generation failed, using source image if available")
 
             recipe_data = {
                 "title": normalized_data["title"],
@@ -142,12 +173,12 @@ class ExtractionService:
                 "total_time_minutes": normalized_data.get("total_time_minutes"),
                 "source_type": source_type.value,
                 "source_url": source_url,  # Keep for backward compatibility
-                "image_url": source_urls[0] if source_urls else None,  # Use first extraction image
+                "image_url": initial_image_url,  # Generated or source image
                 "created_by": user_id,
                 "is_public": True  # Default to public as specified
             }
 
-            # Create recipe in database
+            # Create recipe in database (with generated image already included)
             recipe = await self.recipe_repo.create(recipe_data)
 
             # Create contributor record

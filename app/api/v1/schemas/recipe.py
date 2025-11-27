@@ -59,13 +59,19 @@ class RecipeForkRequest(BaseModel):
 
 
 class RecipeRatingRequest(BaseModel):
-    """Rate recipe request"""
-    rating: int = Field(..., ge=1, le=5)
+    """Rate recipe request (supports half-stars: 0.5, 1.0, 1.5, ..., 5.0)"""
+    rating: float = Field(..., ge=0.5, le=5.0)
+
+
+class RecipeTimingsUpdateRequest(BaseModel):
+    """Update recipe timings request"""
+    prep_time_minutes: Optional[int] = Field(None, ge=0)
+    cook_time_minutes: Optional[int] = Field(None, ge=0)
 
 
 class UserRecipeDataUpdate(BaseModel):
     """Update user-specific recipe data"""
-    rating: Optional[int] = Field(None, ge=1, le=5)
+    rating: Optional[float] = Field(None, ge=0.5, le=5.0)
     custom_prep_time_minutes: Optional[int] = None
     custom_cook_time_minutes: Optional[int] = None
     custom_difficulty: Optional[DifficultyLevel] = None
@@ -114,6 +120,14 @@ class RecipeResponse(BaseModel):
     original_recipe_id: Optional[str] = None
     fork_count: int
 
+    # Rating aggregation (half-star support)
+    average_rating: Optional[float] = None
+    rating_count: int = 0
+    rating_distribution: Optional[dict] = None
+
+    # Cooking count aggregation
+    total_times_cooked: int = 0
+
     is_public: bool
 
     # Additional info
@@ -126,7 +140,7 @@ class RecipeResponse(BaseModel):
 
 class UserRecipeDataResponse(BaseModel):
     """User-specific recipe data response"""
-    rating: Optional[int] = None
+    rating: Optional[float] = None
     custom_prep_time_minutes: Optional[int] = None
     custom_cook_time_minutes: Optional[int] = None
     custom_difficulty: Optional[DifficultyLevel] = None
@@ -155,8 +169,53 @@ class RecipeListItemResponse(BaseModel):
     is_public: bool
     fork_count: int
 
+    # Rating aggregation
+    average_rating: Optional[float] = None
+    rating_count: int = 0
+
+    # Cooking count aggregation
+    total_times_cooked: int = 0
+
     # User data if authenticated
-    user_rating: Optional[int] = None
+    user_rating: Optional[float] = None
     is_favorite: bool = False
 
     created_at: datetime
+
+
+class RecipeTimingsUpdateResponse(BaseModel):
+    """Response for timing update"""
+    prep_time_minutes: Optional[int] = None
+    cook_time_minutes: Optional[int] = None
+    total_time_minutes: Optional[int] = None
+    updated_base_recipe: bool  # True if base recipe was updated, False if user customization
+
+
+class RecipeRatingUpdateResponse(BaseModel):
+    """Response for rating update"""
+    user_rating: float
+    previous_user_rating: Optional[float] = None
+    recipe_average_rating: Optional[float] = None
+    recipe_rating_count: int
+    recipe_rating_distribution: Optional[dict] = None
+
+
+class CookingStatsResponse(BaseModel):
+    """Cooking statistics for a recipe in a time window"""
+    cook_count: int
+    unique_users: int
+    time_window_days: int
+
+
+class TrendingRecipeResponse(RecipeResponse):
+    """Trending recipe with cooking statistics"""
+    cooking_stats: CookingStatsResponse
+
+
+class UserCookingHistoryItemResponse(BaseModel):
+    """User's cooking history for a single recipe"""
+    recipe_id: str
+    recipe_title: str
+    times_cooked: int
+    last_cooked_at: datetime
+    first_cooked_at: datetime
