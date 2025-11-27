@@ -6,7 +6,7 @@ from supabase import Client
 from typing import List, Optional, Dict, Any
 import logging
 
-from app.core.database import get_supabase_client
+from app.core.database import get_supabase_client, get_supabase_admin_client
 from app.core.security import get_current_user, get_current_user_optional
 from app.repositories.recipe_repository import RecipeRepository
 from app.repositories.user_recipe_repository import UserRecipeRepository
@@ -497,7 +497,7 @@ async def update_user_recipe_data(
 async def mark_recipe_cooked(
     recipe_id: str,
     current_user: dict = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: Client = Depends(get_supabase_admin_client)
 ):
     """Mark a recipe as cooked (increments cooked count)"""
     try:
