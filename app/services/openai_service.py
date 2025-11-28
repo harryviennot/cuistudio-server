@@ -754,6 +754,157 @@ Task:
             logger.error(f"Error extracting recipe from multiple images: {str(e)}")
             raise
 
+    async def extract_recipe_from_ocr_text_only(
+        self,
+        ocr_text: str
+    ) -> Dict[str, Any]:
+        """
+        Extract structured recipe from OCR text only (no image).
+        Used for benchmarking to compare against vision-based extraction.
+
+        Args:
+            ocr_text: Raw OCR text extracted from the image
+
+        Returns:
+            Structured recipe data with usage stats
+        """
+        try:
+            system_prompt = """You are a professional recipe extraction expert.
+
+STEP 1 - CONTENT CLASSIFICATION:
+Analyze the OCR text to determine what type of content this is:
+- "recipe_card": Recipe text with ingredients and/or instructions
+- "non_food": Not food-related content
+
+STEP 2 - EXTRACTION:
+
+If "recipe_card":
+- Extract the recipe from the OCR text
+- Fix common OCR errors: misread characters (0/O, 1/l/I), merged words, spacing issues
+- Structure into proper recipe format
+
+If "non_food":
+- Return is_recipe: false with a rejection reason
+
+EXTRACTION RULES (for recipe_card):
+1. Extract COMPLETE ingredients: quantity + unit + name (e.g., "2 cups flour" not "2 cups")
+2. Group ingredients logically based on recipe sections:
+   - "For the [main dish]" - main ingredients (e.g., "For the soup", "For the duck")
+   - "For the [sauce/topping]" - sauce or topping ingredients
+   - "For the garnish" - garnish/decoration ingredients
+   - "To taste" - salt, pepper, and seasonings added to preference
+   - If no logical groups exist, use null for the group field
+3. Number all instruction steps sequentially
+4. Each instruction should have a concise title and detailed description
+5. Group instructions logically based on recipe sections
+6. ESTIMATE cooking time for EACH step based on the action
+7. If servings not visible, estimate based on ingredient quantities
+8. Return ONLY valid JSON, no markdown formatting
+
+Response format:
+{
+    "content_type": "recipe_card" | "non_food",
+    "is_recipe": true or false,
+    "rejection_reason": "Brief explanation (if non_food)",
+
+    // Only include these if is_recipe=true:
+    "title": "Recipe name",
+    "description": "Brief description of the dish",
+    "ingredients": [
+        {"name": "ingredient name", "quantity": 2.0, "unit": "cups", "notes": "optional prep notes", "group": "For the soup"}
+    ],
+    "instructions": [
+        {"step_number": 1, "title": "Step title", "description": "Detailed instruction text", "timer_minutes": 5, "group": "For the soup"}
+    ],
+    "servings": 4,
+    "difficulty": "easy|medium|hard",
+    "tags": ["tag1", "tag2"],
+    "categories": ["category1"],
+    "prep_time_minutes": 15,
+    "cook_time_minutes": 30,
+    "total_time_minutes": 45
+}"""
+
+            user_content = f"""Extract a recipe from this OCR text (may contain OCR errors that need fixing):
+
+---OCR TEXT---
+{ocr_text}
+---END OCR---
+
+Task:
+1. First, classify if this is recipe content or not
+2. If recipe: Extract and structure the recipe, fixing any OCR errors
+3. If not recipe: Return is_recipe: false with rejection reason
+4. Return structured JSON following the specified format"""
+
+            response = await self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.3,
+                max_tokens=2000
+            )
+
+            result = json.loads(response.choices[0].message.content)
+
+            # Check if content is a recipe
+            if not result.get("is_recipe", True):
+                from app.domain.exceptions import NotARecipeError
+                rejection_reason = result.get("rejection_reason", "Text does not contain a recipe")
+                content_type = result.get("content_type", "unknown")
+                logger.info(f"OCR text not a recipe (type: {content_type}): {rejection_reason}")
+                raise NotARecipeError(message=rejection_reason)
+
+            # Validate and structure the response
+            normalized = self._validate_and_structure(result)
+
+            # Add usage statistics
+            usage = response.usage
+            normalized["_extraction_stats"] = {
+                "model": "gpt-4o-mini",
+                "method": "ocr_only",
+                "content_type": result.get("content_type", "recipe_card"),
+                "prompt_tokens": usage.prompt_tokens,
+                "completion_tokens": usage.completion_tokens,
+                "total_tokens": usage.total_tokens,
+                "estimated_cost_usd": self._calculate_cost_text_only(usage, "gpt-4o-mini")
+            }
+
+            logger.info(f"Successfully extracted recipe (OCR-only): {normalized.get('title', 'Unknown')}")
+            logger.info(f"Token usage: {usage.total_tokens} tokens, ~${normalized['_extraction_stats']['estimated_cost_usd']:.4f}")
+
+            return normalized
+
+        except Exception as e:
+            logger.error(f"Error extracting recipe from OCR text only: {str(e)}")
+            raise
+
+    def _calculate_cost_text_only(self, usage, model: str) -> float:
+        """Calculate estimated cost for text-only requests (no image tokens)"""
+        pricing = {
+            "gpt-4o-mini": {
+                "input": 0.15,  # per 1M tokens
+                "output": 0.60
+            },
+            "gpt-4o": {
+                "input": 2.50,
+                "output": 10.00
+            }
+        }
+
+        if model not in pricing:
+            return 0.0
+
+        prices = pricing[model]
+        cost = (
+            (usage.prompt_tokens / 1_000_000) * prices["input"] +
+            (usage.completion_tokens / 1_000_000) * prices["output"]
+        )
+        return cost
+
     def _calculate_cost(self, usage, model: str) -> float:
         """Calculate estimated cost based on token usage"""
         # Pricing per 1M tokens (as of Jan 2025)
