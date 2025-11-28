@@ -3,7 +3,7 @@ Main API v1 router
 """
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, recipes, cookbooks, extraction, upload
+from app.api.v1.endpoints import auth, recipes, cookbooks, extraction, upload, collections
 
 api_router = APIRouter()
 
@@ -13,3 +13,4 @@ api_router.include_router(recipes.router)
 api_router.include_router(cookbooks.router)
 api_router.include_router(extraction.router)
 api_router.include_router(upload.router)
+api_router.include_router(collections.router)

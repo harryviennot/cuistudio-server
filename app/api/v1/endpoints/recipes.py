@@ -26,7 +26,11 @@ from app.api.v1.schemas.recipe import (
     UserRecipeDataResponse,
     RecipeContributorResponse,
     TrendingRecipeResponse,
-    UserCookingHistoryItemResponse
+    UserCookingHistoryItemResponse,
+)
+from app.api.v1.schemas.collection import (
+    SaveRecipeRequest,
+    SaveRecipeResponse
 )
 from app.api.v1.schemas.common import MessageResponse
 from app.domain.models import RecipeTimings, Ingredient, Instruction
@@ -82,6 +86,83 @@ async def create_recipe(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create recipe: {str(e)}"
+        )
+
+
+@router.post("/save", response_model=SaveRecipeResponse, status_code=status.HTTP_201_CREATED)
+async def save_recipe(
+    save_request: SaveRecipeRequest,
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """
+    Save a recipe to a collection.
+
+    This endpoint is used after the user previews a recipe (from extraction)
+    and decides to save it. It handles:
+    - Publishing draft recipes (setting is_draft=false)
+    - Adding recipes to user's collection
+    - Handling existing public recipes (add to collection)
+
+    Flow:
+    1. Submit extraction via POST /extraction/submit
+    2. Poll job status via GET /extraction/jobs/{job_id} until completed
+    3. Preview the draft recipe using GET /recipes/{recipe_id}
+    4. Call this endpoint with recipe_id and collection_id to save
+
+    If no collection_id is provided, uses the user's default "extracted" collection.
+    """
+    from app.services.recipe_save_service import RecipeSaveService
+    from app.repositories.collection_repository import CollectionRepository
+
+    try:
+        save_service = RecipeSaveService(supabase)
+
+        # If no collection_id provided, use the user's "extracted" collection
+        collection_id = save_request.collection_id
+        if not collection_id:
+            collection_repo = CollectionRepository(supabase)
+            extracted_collection = await collection_repo.get_by_slug(
+                current_user["id"],
+                "extracted"
+            )
+            if not extracted_collection:
+                # Create default collections if they don't exist
+                await collection_repo.create_default_collections(current_user["id"])
+                extracted_collection = await collection_repo.get_by_slug(
+                    current_user["id"],
+                    "extracted"
+                )
+            collection_id = extracted_collection["id"]
+
+        result = await save_service.save_recipe_to_collection(
+            user_id=current_user["id"],
+            recipe_id=save_request.recipe_id,
+            collection_id=collection_id
+        )
+
+        return SaveRecipeResponse(
+            recipe_id=result["recipe_id"],
+            collection_id=result["collection_id"],
+            added_to_collection=result["added_to_collection"],
+            was_draft=result.get("was_draft", False)
+        )
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Error saving recipe: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save recipe: {str(e)}"
         )
 
 
@@ -330,9 +411,9 @@ async def update_recipe(
 async def delete_recipe(
     recipe_id: str,
     current_user: dict = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: Client = Depends(get_supabase_admin_client)
 ):
-    """Delete a recipe"""
+    """Delete a recipe (owner only, drafts can always be deleted)"""
     try:
         repo = RecipeRepository(supabase)
 
@@ -350,7 +431,13 @@ async def delete_recipe(
                 detail="You don't have permission to delete this recipe"
             )
 
-        await repo.delete(recipe_id)
+        # Use admin client to bypass RLS for deletion
+        deleted = await repo.delete(recipe_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to delete recipe"
+            )
 
         return MessageResponse(message="Recipe deleted successfully")
 
@@ -588,6 +675,15 @@ async def _format_recipe_response(
             total_time_minutes=recipe.get("total_time_minutes")
         )
 
+    # Get video platform if recipe is from a video
+    video_platform = None
+    if recipe.get("source_type") == "video":
+        from app.repositories.video_source_repository import VideoSourceRepository
+        video_repo = VideoSourceRepository(supabase)
+        video_source = await video_repo.get_by_recipe(recipe["id"])
+        if video_source:
+            video_platform = video_source.get("platform")
+
     return RecipeResponse(
         id=recipe["id"],
         title=recipe["title"],
@@ -612,6 +708,7 @@ async def _format_recipe_response(
         is_public=recipe["is_public"],
         contributors=contributor_responses,
         user_data=user_data,
+        video_platform=video_platform,
         created_at=recipe["created_at"],
         updated_at=recipe["updated_at"]
     )
@@ -653,6 +750,15 @@ async def _format_list_item_response(
             total_time_minutes=recipe.get("total_time_minutes")
         )
 
+    # Get video platform if recipe is from a video
+    video_platform = None
+    if recipe.get("source_type") == "video":
+        from app.repositories.video_source_repository import VideoSourceRepository
+        video_repo = VideoSourceRepository(supabase)
+        video_source = await video_repo.get_by_recipe(recipe["id"])
+        if video_source:
+            video_platform = video_source.get("platform")
+
     return RecipeListItemResponse(
         id=recipe["id"],
         title=recipe["title"],
@@ -668,6 +774,7 @@ async def _format_list_item_response(
         fork_count=recipe.get("fork_count", 0),
         user_rating=user_rating,
         is_favorite=is_favorite,
+        video_platform=video_platform,
         created_at=recipe["created_at"]
     )
 

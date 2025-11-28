@@ -4,16 +4,20 @@ Recipe extraction endpoints
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, File, UploadFile, Request
 from sse_starlette.sse import EventSourceResponse
 from supabase import Client
-from typing import List
+from typing import List, Dict, Any
+from pydantic import BaseModel
 import logging
 import asyncio
 import json
+import time
 
 from app.core.database import get_supabase_client, get_supabase_admin_client, get_supabase_user_client
 from app.core.security import get_current_user
 from app.core.events import get_event_broadcaster
 from app.services.extraction_service import ExtractionService
 from app.services.upload_service import UploadService
+from app.services.openai_service import OpenAIService
+from app.services.extractors.photo_extractor import PhotoExtractor
 from app.api.v1.schemas.extraction import (
     ExtractionSubmitRequest,
     ExtractionJobResponse,
@@ -24,6 +28,18 @@ from app.domain.enums import SourceType, ExtractionStatus
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/extraction", tags=["Extraction"])
+
+
+# Benchmark schemas
+class BenchmarkRequest(BaseModel):
+    image_path: str  # Local file path to image
+
+
+class BenchmarkResult(BaseModel):
+    image_path: str
+    ocr_text: str
+    with_image: Dict[str, Any]
+    ocr_only: Dict[str, Any]
 
 
 @router.post("/submit", response_model=ExtractionJobResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -37,6 +53,15 @@ async def submit_extraction(
 ):
     """
     Submit content for recipe extraction.
+
+    This endpoint extracts recipe data WITHOUT saving to the database.
+    The extracted data is stored in the job and returned when complete.
+    Use POST /recipes/save to persist the recipe after preview.
+
+    For video URLs (TikTok, YouTube Shorts, Instagram Reels), duplicate
+    detection is performed first. If the video was already extracted,
+    the existing recipe data is returned with existing_recipe_id set.
+
     Returns a job ID for tracking progress.
     """
     try:
@@ -60,9 +85,10 @@ async def submit_extraction(
             )
 
         # Run extraction in background (use admin_client for background tasks)
+        # Use the new extract_recipe method that doesn't save to DB
         admin_extraction_service = ExtractionService(admin_client)
         background_tasks.add_task(
-            admin_extraction_service.extract_and_create_recipe,
+            admin_extraction_service.extract_recipe,
             current_user["id"],
             extraction_request.source_type,
             source,
@@ -129,9 +155,10 @@ async def submit_image_extraction(
         )
 
         # Step 3: Run extraction in background (use admin_client for background tasks)
+        # Use extract_recipe to only extract without saving - user must confirm via /recipes/save
         admin_extraction_service = ExtractionService(admin_client)
         background_tasks.add_task(
-            admin_extraction_service.extract_and_create_recipe,
+            admin_extraction_service.extract_recipe,
             current_user["id"],
             SourceType.PHOTO,
             image_urls,  # Pass list of URLs
@@ -315,4 +342,125 @@ async def stream_extraction_job(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to start event stream: {str(e)}"
+        )
+
+
+# =============================================================================
+# BENCHMARK ENDPOINT (Temporary - No Auth Required)
+# =============================================================================
+
+@router.post("/benchmark", response_model=BenchmarkResult)
+async def benchmark_extraction(
+    request: BenchmarkRequest
+):
+    """
+    Benchmark endpoint to compare image extraction methods.
+
+    Runs both extraction methods on the same image:
+    1. With Image: OCR + GPT-4o-mini with image (current production method)
+    2. OCR-Only: OCR + GPT-4o-mini with only OCR text (no image)
+
+    NO AUTHENTICATION REQUIRED - This is temporary for benchmarking.
+    Remove this endpoint after benchmarking is complete.
+    """
+    import os
+    from PIL import Image
+    import io
+
+    image_path = request.image_path
+
+    # Validate file exists
+    if not os.path.exists(image_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Image file not found: {image_path}"
+        )
+
+    try:
+        # Initialize services
+        openai_service = OpenAIService()
+        photo_extractor = PhotoExtractor()
+
+        # Step 1: Run OCR (shared between both methods)
+        logger.info(f"Running OCR on {image_path}")
+        ocr_start = time.time()
+        ocr_text = await photo_extractor._run_ocr(image_path)
+        ocr_time = time.time() - ocr_start
+        logger.info(f"OCR completed in {ocr_time:.2f}s, extracted {len(ocr_text)} chars")
+
+        # Step 2: Method A - With Image (current production method)
+        logger.info("Running extraction WITH image...")
+        with_image_start = time.time()
+        try:
+            with_image_result = await openai_service.extract_recipe_from_image_with_ocr(
+                image_path,
+                ocr_text
+            )
+            with_image_time = time.time() - with_image_start
+            with_image_result["_benchmark"] = {
+                "extraction_time_seconds": with_image_time,
+                "ocr_time_seconds": ocr_time,
+                "total_time_seconds": ocr_time + with_image_time
+            }
+            with_image_error = None
+        except Exception as e:
+            with_image_time = time.time() - with_image_start
+            with_image_result = {
+                "_benchmark": {
+                    "extraction_time_seconds": with_image_time,
+                    "ocr_time_seconds": ocr_time,
+                    "total_time_seconds": ocr_time + with_image_time
+                }
+            }
+            with_image_error = str(e)
+            logger.error(f"With-image extraction failed: {e}")
+
+        # Step 3: Method B - OCR Only (no image)
+        logger.info("Running extraction OCR-ONLY...")
+        ocr_only_start = time.time()
+        try:
+            ocr_only_result = await openai_service.extract_recipe_from_ocr_text_only(ocr_text)
+            ocr_only_time = time.time() - ocr_only_start
+            ocr_only_result["_benchmark"] = {
+                "extraction_time_seconds": ocr_only_time,
+                "ocr_time_seconds": ocr_time,
+                "total_time_seconds": ocr_time + ocr_only_time
+            }
+            ocr_only_error = None
+        except Exception as e:
+            ocr_only_time = time.time() - ocr_only_start
+            ocr_only_result = {
+                "_benchmark": {
+                    "extraction_time_seconds": ocr_only_time,
+                    "ocr_time_seconds": ocr_time,
+                    "total_time_seconds": ocr_time + ocr_only_time
+                }
+            }
+            ocr_only_error = str(e)
+            logger.error(f"OCR-only extraction failed: {e}")
+
+        # Add errors if any
+        if with_image_error:
+            with_image_result["error"] = with_image_error
+        if ocr_only_error:
+            ocr_only_result["error"] = ocr_only_error
+
+        logger.info(f"Benchmark complete for {image_path}")
+        logger.info(f"  With image: {with_image_time:.2f}s")
+        logger.info(f"  OCR only: {ocr_only_time:.2f}s")
+
+        return BenchmarkResult(
+            image_path=image_path,
+            ocr_text=ocr_text,
+            with_image=with_image_result,
+            ocr_only=ocr_only_result
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Benchmark error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Benchmark failed: {str(e)}"
         )

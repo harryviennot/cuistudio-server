@@ -10,6 +10,7 @@ import logging
 from app.core.config import get_settings
 from app.core.logging_config import setup_logging
 from app.core.events import init_event_broadcaster, shutdown_event_broadcaster
+from app.core.rate_limit import RateLimitMiddleware
 from app.api.v1.router import api_router
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,13 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
         docs_url="/api/docs" if not settings.is_production else None,
         redoc_url="/api/redoc" if not settings.is_production else None,
+    )
+
+    # Rate Limiting Middleware (added first, processed last in middleware chain)
+    app.add_middleware(
+        RateLimitMiddleware,
+        requests_per_minute=settings.RATE_LIMIT_PER_MINUTE,
+        extraction_per_minute=settings.EXTRACTION_RATE_LIMIT_PER_MINUTE
     )
 
     # CORS Middleware

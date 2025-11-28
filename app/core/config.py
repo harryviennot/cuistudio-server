@@ -41,6 +41,13 @@ class Settings(BaseSettings):
 
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 60
+    EXTRACTION_RATE_LIMIT_PER_MINUTE: int = 10  # Stricter limit for heavy extraction operations
+
+    # Whisper Model
+    WHISPER_MODEL: str = "base"  # Options: tiny, base, small, medium, large
+
+    # Uvicorn Workers (0 = auto-calculate based on CPU cores)
+    UVICORN_WORKERS: int = 0
 
     # Logging
     LOG_LEVEL: str = "INFO"
@@ -48,7 +55,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        case_sensitive=True
+        case_sensitive=True,
+        extra="ignore"  # Ignore extra env vars not defined in Settings
     )
 
     @property
