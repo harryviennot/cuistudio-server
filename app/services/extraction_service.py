@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, Callable, Union, List
 from supabase import Client
 
 from app.domain.enums import SourceType, ExtractionStatus
+from app.domain.exceptions import NotARecipeError
 from app.services.extractors.video_extractor import VideoExtractor
 from app.services.extractors.photo_extractor import PhotoExtractor
 from app.services.extractors.voice_extractor import VoiceExtractor
@@ -559,6 +560,22 @@ class ExtractionService:
                 "job_id": job_id,
                 "status": "completed",
                 "recipe_id": recipe_id
+            }
+
+        except NotARecipeError as e:
+            logger.info(f"Content not a recipe: {e.message}")
+            if job_id:
+                await self._update_job_status(
+                    job_id,
+                    ExtractionStatus.NOT_A_RECIPE,
+                    100,
+                    "Content analysis complete",
+                    error_message=e.message
+                )
+            return {
+                "job_id": job_id,
+                "status": "not_a_recipe",
+                "recipe_id": None
             }
 
         except Exception as e:

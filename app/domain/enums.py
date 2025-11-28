@@ -26,6 +26,7 @@ class ExtractionStatus(str, Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    NOT_A_RECIPE = "not_a_recipe"  # Content doesn't contain a recipe
 
 
 class PermissionLevel(str, Enum):

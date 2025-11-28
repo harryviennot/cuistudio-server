@@ -5,6 +5,8 @@ Easily replaceable with other AI providers
 from typing import Dict, Any, List, Optional
 import json
 import logging
+import base64
+import httpx
 from openai import AsyncOpenAI
 
 from app.core.config import get_settings
@@ -20,6 +22,37 @@ class OpenAIService:
     def __init__(self):
         self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY, organization=settings.OPENAI_ORGANIZATION_ID, project=settings.OPENAI_PROJECT_ID)
         self.model = "gpt-4o"  # Using GPT-4
+
+    async def _download_image_as_base64(self, image_url: str) -> str:
+        """
+        Download an image from URL and convert to base64 data URI.
+        This avoids OpenAI timeout issues when fetching from Supabase storage.
+
+        Args:
+            image_url: URL of the image to download
+
+        Returns:
+            Base64 data URI string (data:image/jpeg;base64,...)
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(image_url)
+                response.raise_for_status()
+
+                # Determine content type from response headers or default to jpeg
+                content_type = response.headers.get("content-type", "image/jpeg")
+                # Normalize content type (handle cases like "image/jpeg; charset=utf-8")
+                content_type = content_type.split(";")[0].strip()
+
+                # Encode to base64
+                image_base64 = base64.b64encode(response.content).decode("utf-8")
+
+                logger.debug(f"Downloaded image ({len(response.content)} bytes) as {content_type}")
+                return f"data:{content_type};base64,{image_base64}"
+
+        except Exception as e:
+            logger.error(f"Error downloading image from {image_url}: {str(e)}")
+            raise
 
     async def normalize_recipe(
         self,
@@ -41,9 +74,21 @@ class OpenAIService:
         """
         try:
             system_prompt = """You are a professional recipe parser and normalizer.
-Your task is to extract recipe information from raw content and structure it properly.
+Your task is to first determine if the content contains a recipe, then extract and structure it.
 
-IMPORTANT RULES:
+STEP 1 - CONTENT CLASSIFICATION:
+Determine if this content is actually a recipe. A recipe must contain:
+- Food/dish being prepared
+- At least some ingredients OR cooking/preparation instructions
+
+NOT recipes include:
+- Random videos (cat videos, vlogs, music, etc.)
+- Non-food content (landscapes, people, objects)
+- General text without cooking instructions
+- Product/restaurant reviews without recipes
+- Food photos without recipes attached
+
+STEP 2 - IF RECIPE, EXTRACT DATA:
 1. Extract ALL ingredients with quantities and units
 2. Group ingredients logically by recipe sections:
    - "For the [component]" - e.g., "For the duck", "For the sauce", "For the pasta"
@@ -67,6 +112,10 @@ IMPORTANT RULES:
 
 Response format:
 {
+    "is_recipe": true or false,
+    "rejection_reason": "Brief explanation if not a recipe (null if is_recipe=true)",
+
+    // Only include the following fields if is_recipe=true:
     "title": "Recipe name",
     "description": "Brief description",
     "language": "en",
@@ -104,6 +153,13 @@ Extract and normalize into JSON format."""
             )
 
             result = json.loads(response.choices[0].message.content)
+
+            # Check if content is a recipe
+            if not result.get("is_recipe", True):
+                from app.domain.exceptions import NotARecipeError
+                rejection_reason = result.get("rejection_reason", "Content does not appear to be a recipe")
+                logger.info(f"Content not a recipe: {rejection_reason}")
+                raise NotARecipeError(message=rejection_reason)
 
             # Validate and structure the response
             normalized = self._validate_and_structure(result)
@@ -354,38 +410,54 @@ Combine information from all images to give a complete picture of the recipe."""
             Structured recipe data with usage stats
         """
         try:
-            system_prompt = """You are a professional recipe extraction expert. Your task is to extract structured recipe data from images, using OCR text as a reference that may contain errors.
+            system_prompt = """You are a professional recipe extraction expert.
 
-IMPORTANT RULES:
-1. Compare OCR text against the visual image - the image is the ground truth
-2. Fix OCR errors: misread characters, merged words, spacing issues
-3. Extract COMPLETE ingredients: quantity + unit + name (e.g., "2 cups flour" not "2 cups")
-4. Group ingredients logically based on recipe sections:
+STEP 1 - CONTENT CLASSIFICATION:
+Analyze the image to determine what type of content this is:
+- "recipe_card": A recipe card, recipe page, or cooking instructions with visible text
+- "food_photo": A photo of prepared food/dish (no recipe text visible)
+- "non_food": Not food-related content (landscapes, people, pets, objects, etc.)
+
+STEP 2 - EXTRACTION BASED ON TYPE:
+
+If "recipe_card":
+- Extract the recipe from the visible text, using OCR as reference
+- Compare OCR text against the visual image - the image is the ground truth
+- Fix OCR errors: misread characters, merged words, spacing issues
+
+If "food_photo":
+- Identify the dish shown in the image
+- Generate a plausible, authentic recipe for that dish
+- Mark the recipe as AI-generated (is_ai_generated: true)
+- Be creative but realistic with ingredients and instructions
+
+If "non_food":
+- Return is_recipe: false with a rejection reason
+
+EXTRACTION RULES (for recipe_card and food_photo):
+1. Extract COMPLETE ingredients: quantity + unit + name (e.g., "2 cups flour" not "2 cups")
+2. Group ingredients logically based on recipe sections:
    - "For the [main dish]" - main ingredients (e.g., "For the soup", "For the duck")
    - "For the [sauce/topping]" - sauce or topping ingredients (e.g., "For the sauce", "For the glaze")
    - "For the garnish" - garnish/decoration ingredients
    - "To taste" - salt, pepper, and seasonings added to preference
    - If no logical groups exist, use null for the group field
-5. Number all instruction steps sequentially
-6. Each instruction should have a concise title and detailed description
-7. Group instructions logically based on recipe sections:
-   - "For the [component]" - e.g., "For the duck", "For the sauce", "For the pasta"
-   - "Assembly" - final plating/serving steps
-   - "For the garnish" - garnish preparation
-   - Use null if no logical groups exist
-8. ESTIMATE cooking time for EACH step based on the action:
-   - Prep tasks (chopping, mixing): null
-   - "Faites revenir/sauté": 3-5 minutes
-   - "Laissez cuire/cook": extract exact time if mentioned, otherwise estimate (10-30 min)
-   - "Faites griller/grill": 2-5 minutes
-   - "Laissez reposer/rest": extract exact time if mentioned
-   - "Mixez/blend": null (instant)
-   - Use the TOTAL cook time to validate individual step times add up reasonably
-9. If servings not visible, estimate based on ingredient quantities
-10. Return ONLY valid JSON, no markdown formatting
+3. Number all instruction steps sequentially
+4. Each instruction should have a concise title and detailed description
+5. Group instructions logically based on recipe sections
+6. ESTIMATE cooking time for EACH step based on the action
+7. If servings not visible, estimate based on ingredient quantities
+8. Return ONLY valid JSON, no markdown formatting
 
 Response format:
 {
+    "content_type": "recipe_card" | "food_photo" | "non_food",
+    "is_recipe": true or false,
+    "is_ai_generated": false or true,
+    "identified_dish": "Dish name (for food_photo only)",
+    "rejection_reason": "Brief explanation (if non_food)",
+
+    // Only include these if is_recipe=true:
     "title": "Recipe name",
     "description": "Brief description of the dish",
     "ingredients": [
@@ -403,27 +475,39 @@ Response format:
     "total_time_minutes": 45
 }"""
 
+            # Download image and convert to base64 to avoid OpenAI timeout issues
+            # with Supabase storage URLs
+            if image_url.startswith("http"):
+                logger.info(f"Downloading image for base64 encoding: {image_url[:80]}...")
+                image_data_uri = await self._download_image_as_base64(image_url)
+            else:
+                # Local file path - read and encode
+                import aiofiles
+                async with aiofiles.open(image_url, "rb") as f:
+                    image_bytes = await f.read()
+                image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+                image_data_uri = f"data:image/jpeg;base64,{image_base64}"
+
             user_content = [
                 {
                     "type": "text",
-                    "text": f"""Extract the recipe from this image. OCR has extracted the following text (may contain errors):
+                    "text": f"""Analyze this image and extract a recipe. OCR has extracted the following text (may contain errors):
 
 ---OCR TEXT---
 {ocr_text}
 ---END OCR---
 
 Task:
-1. Validate OCR text against what you see in the image
-2. Fix any OCR errors or missing information
-3. Extract the COMPLETE recipe with ALL ingredients (quantity + unit + name)
-4. Group ingredients if there are logical sections
-5. Extract all instruction steps with any timing information
-6. Return structured JSON following the specified format"""
+1. First, classify the image type (recipe_card, food_photo, or non_food)
+2. If recipe_card: Extract the recipe from visible text, fix OCR errors
+3. If food_photo: Identify the dish and generate a plausible recipe
+4. If non_food: Return is_recipe: false with rejection reason
+5. Return structured JSON following the specified format"""
                 },
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": image_url,
+                        "url": image_data_uri,
                         "detail": "high"
                     }
                 }
@@ -442,13 +526,27 @@ Task:
 
             result = json.loads(response.choices[0].message.content)
 
+            # Check if content is a recipe
+            if not result.get("is_recipe", True):
+                from app.domain.exceptions import NotARecipeError
+                rejection_reason = result.get("rejection_reason", "Image does not contain a recipe")
+                content_type = result.get("content_type", "unknown")
+                logger.info(f"Image not a recipe (type: {content_type}): {rejection_reason}")
+                raise NotARecipeError(message=rejection_reason)
+
             # Validate and structure the response
             normalized = self._validate_and_structure(result)
+
+            # Preserve AI-generated flag if present
+            if result.get("is_ai_generated"):
+                normalized["is_ai_generated"] = True
+                normalized["identified_dish"] = result.get("identified_dish")
 
             # Add usage statistics
             usage = response.usage
             normalized["_extraction_stats"] = {
                 "model": "gpt-4o-mini",
+                "content_type": result.get("content_type", "recipe_card"),
                 "prompt_tokens": usage.prompt_tokens,
                 "completion_tokens": usage.completion_tokens,
                 "total_tokens": usage.total_tokens,
@@ -456,6 +554,8 @@ Task:
             }
 
             logger.info(f"Successfully extracted recipe: {normalized.get('title', 'Unknown')}")
+            if result.get("is_ai_generated"):
+                logger.info(f"Recipe was AI-generated from food photo (identified: {result.get('identified_dish')})")
             logger.info(f"Token usage: {usage.total_tokens} tokens, ~${normalized['_extraction_stats']['estimated_cost_usd']:.4f}")
 
             return normalized
@@ -489,35 +589,49 @@ Task:
             if len(image_urls) == 1:
                 return await self.extract_recipe_from_image_with_ocr(image_urls[0], ocr_texts[0])
 
-            system_prompt = """You are a professional recipe extraction expert. Your task is to extract structured recipe data from multiple images showing different parts of the same recipe.
+            system_prompt = """You are a professional recipe extraction expert.
 
-IMPORTANT RULES:
-1. Analyze ALL images together - they show different parts of one recipe
-2. Use OCR texts as reference but validate against the images (images are ground truth)
-3. Fix OCR errors: misread characters, merged words, spacing issues
-4. Extract COMPLETE ingredients from all images: quantity + unit + name
-5. Combine ingredients and instructions from all images into one coherent recipe
-6. Group ingredients logically based on recipe sections:
-   - "For the [main dish]" - main ingredients
-   - "For the [sauce/topping]" - sauce or topping ingredients
-   - "For the garnish" - garnish/decoration
-   - "To taste" - seasonings added to preference
-   - Use null if no logical grouping exists
-7. Number all instruction steps sequentially across all images
-8. Each instruction should have a concise title and detailed description
-9. Group instructions logically based on recipe sections:
-   - "For the [component]" - e.g., "For the duck", "For the sauce", "For the pasta"
-   - "Assembly" - final plating/serving steps
-   - "For the garnish" - garnish preparation
-   - Use null if no logical groups exist
-10. ESTIMATE cooking time for EACH step based on the action:
-   - Prep tasks (chopping, mixing): null
-   - Cooking tasks: extract exact time if mentioned, otherwise estimate based on action
-   - Use total cook time to validate individual step times
-11. Return ONLY valid JSON, no markdown formatting
+STEP 1 - CONTENT CLASSIFICATION:
+Analyze all images together to determine what type of content this is:
+- "recipe_card": Recipe cards, recipe pages, or cooking instructions with visible text
+- "food_photo": Photos of prepared food/dishes (no recipe text visible)
+- "non_food": Not food-related content (landscapes, people, pets, objects, etc.)
+
+STEP 2 - EXTRACTION BASED ON TYPE:
+
+If "recipe_card":
+- Extract the recipe from the visible text across all images
+- Combine ingredients and instructions from all images into one coherent recipe
+- Use OCR texts as reference but validate against the images (images are ground truth)
+- Fix OCR errors: misread characters, merged words, spacing issues
+
+If "food_photo":
+- Identify the dish(es) shown in the images
+- Generate a plausible, authentic recipe for that dish
+- Mark the recipe as AI-generated (is_ai_generated: true)
+- Be creative but realistic with ingredients and instructions
+
+If "non_food":
+- Return is_recipe: false with a rejection reason
+
+EXTRACTION RULES (for recipe_card and food_photo):
+1. Extract COMPLETE ingredients: quantity + unit + name
+2. Group ingredients logically based on recipe sections
+3. Number all instruction steps sequentially
+4. Each instruction should have a concise title and detailed description
+5. Group instructions logically based on recipe sections
+6. ESTIMATE cooking time for EACH step based on the action
+7. Return ONLY valid JSON, no markdown formatting
 
 Response format:
 {
+    "content_type": "recipe_card" | "food_photo" | "non_food",
+    "is_recipe": true or false,
+    "is_ai_generated": false or true,
+    "identified_dish": "Dish name (for food_photo only)",
+    "rejection_reason": "Brief explanation (if non_food)",
+
+    // Only include these if is_recipe=true:
     "title": "Recipe name",
     "description": "Brief description",
     "ingredients": [
@@ -541,11 +655,27 @@ Response format:
                 ocr_summary.append(f"--- Image {idx} OCR ---\n{ocr_text}")
             combined_ocr = "\n\n".join(ocr_summary)
 
+            # Download all images and convert to base64 to avoid OpenAI timeout issues
+            logger.info(f"Downloading {len(image_urls)} images for base64 encoding...")
+            image_data_uris = []
+            for idx, url in enumerate(image_urls, 1):
+                if url.startswith("http"):
+                    logger.info(f"Downloading image {idx}/{len(image_urls)}: {url[:60]}...")
+                    data_uri = await self._download_image_as_base64(url)
+                else:
+                    # Local file path - read and encode
+                    import aiofiles
+                    async with aiofiles.open(url, "rb") as f:
+                        image_bytes = await f.read()
+                    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+                    data_uri = f"data:image/jpeg;base64,{image_base64}"
+                image_data_uris.append(data_uri)
+
             # Build content with text and all images
             user_content = [
                 {
                     "type": "text",
-                    "text": f"""Extract the recipe from these {len(image_urls)} images. They show different parts of the same recipe.
+                    "text": f"""Analyze these {len(image_urls)} images and extract a recipe.
 
 OCR has extracted text from each image (may contain errors):
 
@@ -554,20 +684,20 @@ OCR has extracted text from each image (may contain errors):
 ---END OCR---
 
 Task:
-1. Analyze all {len(image_urls)} images together
-2. Validate OCR texts against what you see in the images
-3. Fix any OCR errors or missing information
-4. Combine ALL ingredients and instructions from all images
-5. Return one complete, structured recipe in JSON format"""
+1. First, classify the image type (recipe_card, food_photo, or non_food)
+2. If recipe_card: Extract recipe from visible text, fix OCR errors, combine from all images
+3. If food_photo: Identify the dish and generate a plausible recipe
+4. If non_food: Return is_recipe: false with rejection reason
+5. Return structured JSON following the specified format"""
                 }
             ]
 
-            # Add all images
-            for idx, url in enumerate(image_urls, 1):
+            # Add all images using base64 data URIs
+            for idx, data_uri in enumerate(image_data_uris, 1):
                 user_content.append({
                     "type": "image_url",
                     "image_url": {
-                        "url": url,
+                        "url": data_uri,
                         "detail": "high"
                     }
                 })
@@ -585,13 +715,27 @@ Task:
 
             result = json.loads(response.choices[0].message.content)
 
+            # Check if content is a recipe
+            if not result.get("is_recipe", True):
+                from app.domain.exceptions import NotARecipeError
+                rejection_reason = result.get("rejection_reason", "Images do not contain a recipe")
+                content_type = result.get("content_type", "unknown")
+                logger.info(f"Images not a recipe (type: {content_type}): {rejection_reason}")
+                raise NotARecipeError(message=rejection_reason)
+
             # Validate and structure
             normalized = self._validate_and_structure(result)
+
+            # Preserve AI-generated flag if present
+            if result.get("is_ai_generated"):
+                normalized["is_ai_generated"] = True
+                normalized["identified_dish"] = result.get("identified_dish")
 
             # Add usage statistics
             usage = response.usage
             normalized["_extraction_stats"] = {
                 "model": "gpt-4o-mini",
+                "content_type": result.get("content_type", "recipe_card"),
                 "image_count": len(image_urls),
                 "prompt_tokens": usage.prompt_tokens,
                 "completion_tokens": usage.completion_tokens,
@@ -600,6 +744,8 @@ Task:
             }
 
             logger.info(f"Successfully extracted recipe from {len(image_urls)} images: {normalized.get('title', 'Unknown')}")
+            if result.get("is_ai_generated"):
+                logger.info(f"Recipe was AI-generated from food photo (identified: {result.get('identified_dish')})")
             logger.info(f"Token usage: {usage.total_tokens} tokens, ~${normalized['_extraction_stats']['estimated_cost_usd']:.4f}")
 
             return normalized
