@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional, Callable, Union, List
 from supabase import Client
 
 from app.domain.enums import SourceType, ExtractionStatus
-from app.domain.exceptions import NotARecipeError
+from app.domain.exceptions import NotARecipeError, WebsiteBlockedError
 from app.services.extractors.video_extractor import VideoExtractor
 from app.services.extractors.photo_extractor import PhotoExtractor
 from app.services.extractors.voice_extractor import VoiceExtractor
@@ -605,6 +605,22 @@ class ExtractionService:
             return {
                 "job_id": job_id,
                 "status": "not_a_recipe",
+                "recipe_id": None
+            }
+
+        except WebsiteBlockedError as e:
+            logger.info(f"Website blocks extraction: {e.url}")
+            if job_id:
+                await self._update_job_status(
+                    job_id,
+                    ExtractionStatus.WEBSITE_BLOCKED,
+                    100,
+                    "Website blocks automated extraction",
+                    error_message=e.message
+                )
+            return {
+                "job_id": job_id,
+                "status": "website_blocked",
                 "recipe_id": None
             }
 

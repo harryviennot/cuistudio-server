@@ -90,15 +90,35 @@ class LinkExtractor(BaseExtractor):
         try:
             self.update_progress(10, "Fetching webpage")
 
-            # Fetch the webpage using async httpx
+            # Fetch the webpage using async httpx with realistic browser headers
             async with httpx.AsyncClient(timeout=URL_FETCH_TIMEOUT) as client:
                 response = await client.get(
                     source,
                     headers={
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'DNT': '1',
+                        'Connection': 'keep-alive',
+                        'Upgrade-Insecure-Requests': '1',
+                        'Sec-Fetch-Dest': 'document',
+                        'Sec-Fetch-Mode': 'navigate',
+                        'Sec-Fetch-Site': 'none',
+                        'Sec-Fetch-User': '?1',
+                        'Cache-Control': 'max-age=0'
                     },
                     follow_redirects=True
                 )
+
+                # Check for 403 Forbidden - website blocks scraping
+                if response.status_code == 403:
+                    from app.domain.exceptions import WebsiteBlockedError
+                    raise WebsiteBlockedError(
+                        url=source,
+                        message="This website blocks automated recipe extraction"
+                    )
+
                 response.raise_for_status()
 
             self.update_progress(30, "Parsing HTML content")

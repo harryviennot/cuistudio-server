@@ -27,6 +27,7 @@ class ExtractionStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     NOT_A_RECIPE = "not_a_recipe"  # Content doesn't contain a recipe
+    WEBSITE_BLOCKED = "website_blocked"  # Website blocks automated extraction
 
 
 class PermissionLevel(str, Enum):
