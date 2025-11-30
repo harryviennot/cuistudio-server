@@ -26,6 +26,7 @@ class ExtractionStatus(str, Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
     NOT_A_RECIPE = "not_a_recipe"  # Content doesn't contain a recipe
     WEBSITE_BLOCKED = "website_blocked"  # Website blocks automated extraction
 

@@ -357,6 +357,77 @@ class ExtractionService:
             logger.error(f"Error getting job status: {str(e)}")
             raise
 
+    async def cancel_extraction_job(self, job_id: str, user_id: str) -> Dict[str, str]:
+        """
+        Cancel an extraction job.
+
+        Only allows cancellation of pending or processing jobs.
+        Updates status to cancelled; background task will check and abort saving.
+
+        Args:
+            job_id: The extraction job ID
+            user_id: The user requesting cancellation (for ownership verification)
+
+        Returns:
+            Dict with success message
+
+        Raises:
+            ValueError: If job not found, user doesn't own it, or job can't be cancelled
+        """
+        try:
+            # Get job
+            job = await self.get_job_status(job_id)
+
+            if not job:
+                raise ValueError("Job not found")
+
+            # Verify ownership
+            if job["user_id"] != user_id:
+                raise ValueError("You don't have permission to cancel this job")
+
+            # Check if job can be cancelled
+            current_status = job["status"]
+            cancellable_statuses = [ExtractionStatus.PENDING.value, ExtractionStatus.PROCESSING.value]
+
+            if current_status not in cancellable_statuses:
+                raise ValueError(
+                    f"Cannot cancel job with status '{current_status}'. "
+                    f"Only pending or processing jobs can be cancelled."
+                )
+
+            # Update job status to cancelled
+            await asyncio.to_thread(
+                lambda: self.supabase.table("extraction_jobs")
+                    .update({
+                        "status": ExtractionStatus.CANCELLED.value,
+                        "current_step": "Cancelled by user"
+                    })
+                    .eq("id", job_id)
+                    .execute()
+            )
+
+            # Broadcast cancellation event to SSE subscribers
+            try:
+                broadcaster = get_event_broadcaster()
+                await broadcaster.publish(job_id, {
+                    "id": job_id,
+                    "status": ExtractionStatus.CANCELLED.value,
+                    "progress_percentage": job.get("progress_percentage", 0),
+                    "current_step": "Cancelled by user"
+                })
+            except Exception as broadcast_error:
+                logger.error(f"Error broadcasting cancellation event: {str(broadcast_error)}")
+
+            logger.info(f"Cancelled extraction job {job_id} by user {user_id}")
+
+            return {"message": "Extraction job cancelled successfully"}
+
+        except ValueError:
+            raise
+        except Exception as e:
+            logger.error(f"Error cancelling extraction job: {str(e)}")
+            raise ValueError(f"Failed to cancel extraction job: {str(e)}")
+
     async def extract_recipe(
         self,
         user_id: str,
@@ -457,6 +528,17 @@ class ExtractionService:
             extractor = self._get_extractor(source_type, sync_progress_callback)
             raw_content = await extractor.extract(source)
 
+            # Check if job was cancelled after extraction
+            if job_id:
+                current_job = await self.get_job_status(job_id)
+                if current_job and current_job["status"] == ExtractionStatus.CANCELLED.value:
+                    logger.info(f"Job {job_id} was cancelled after extraction, stopping process")
+                    return {
+                        "job_id": job_id,
+                        "status": "cancelled",
+                        "recipe_id": None
+                    }
+
             # Step 2: Normalize and structure the recipe using AI (50-70% range)
             if source_type == SourceType.PHOTO:
                 normalized_data = raw_content
@@ -468,6 +550,17 @@ class ExtractionService:
                         "Recipe data extracted"
                     )
             else:
+                # Check if job was cancelled before normalization
+                if job_id:
+                    current_job = await self.get_job_status(job_id)
+                    if current_job and current_job["status"] == ExtractionStatus.CANCELLED.value:
+                        logger.info(f"Job {job_id} was cancelled before normalization, stopping process")
+                        return {
+                            "job_id": job_id,
+                            "status": "cancelled",
+                            "recipe_id": None
+                        }
+
                 if job_id:
                     await self._update_job_status(
                         job_id,
@@ -553,6 +646,21 @@ class ExtractionService:
                     f"Tokens: {stats.get('total_tokens')}, "
                     f"Cost: ${stats.get('estimated_cost_usd', 0):.4f}"
                 )
+
+            # Check if job was cancelled before creating draft
+            if job_id:
+                current_job = await self.get_job_status(job_id)
+                if current_job and current_job["status"] == ExtractionStatus.CANCELLED.value:
+                    logger.info(f"Job {job_id} was cancelled, skipping draft recipe creation")
+
+                    # Clean up any temp files if needed
+                    # (extractors already have cleanup in their __del__ methods)
+
+                    return {
+                        "job_id": job_id,
+                        "status": "cancelled",
+                        "recipe_id": None
+                    }
 
             # Step 5: Create DRAFT recipe (90% range)
             if job_id:

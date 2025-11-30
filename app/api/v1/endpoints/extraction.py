@@ -23,6 +23,7 @@ from app.api.v1.schemas.extraction import (
     ExtractionJobResponse,
     ImageExtractionResponse
 )
+from app.api.v1.schemas.common import MessageResponse
 from app.api.v1.schemas.upload import MAX_IMAGES_PER_EXTRACTION
 from app.domain.enums import SourceType, ExtractionStatus
 
@@ -216,6 +217,59 @@ async def get_extraction_job(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get extraction job: {str(e)}"
+        )
+
+
+@router.delete("/jobs/{job_id}", response_model=MessageResponse)
+async def cancel_extraction_job(
+    job_id: str,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+    user_client: Client = Depends(get_supabase_user_client)
+):
+    """
+    Cancel an extraction job.
+
+    Only jobs with status 'pending' or 'processing' can be cancelled.
+    Cancelling a job will prevent the recipe from being created, but the
+    background extraction process may continue until it checks the status.
+    """
+    try:
+        extraction_service = ExtractionService(user_client)
+
+        result = await extraction_service.cancel_extraction_job(
+            job_id,
+            current_user["id"]
+        )
+
+        return MessageResponse(**result)
+
+    except ValueError as e:
+        # Map ValueError to appropriate HTTP errors
+        error_msg = str(e)
+        if "not found" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=error_msg
+            )
+        elif "permission" in error_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=error_msg
+            )
+        else:
+            # Cannot cancel (wrong status)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_msg
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error cancelling extraction job: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to cancel extraction job: {str(e)}"
         )
 
 
