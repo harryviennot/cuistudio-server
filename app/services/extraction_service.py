@@ -12,8 +12,8 @@ from app.domain.exceptions import NotARecipeError
 from app.services.extractors.video_extractor import VideoExtractor
 from app.services.extractors.photo_extractor import PhotoExtractor
 from app.services.extractors.voice_extractor import VoiceExtractor
-from app.services.extractors.url_extractor import URLExtractor
 from app.services.extractors.paste_extractor import PasteExtractor
+from app.services.extractors.link_extractor import LinkExtractor
 from app.services.openai_service import OpenAIService
 from app.services.flux_service import FluxService
 from app.services.video_url_parser import VideoURLParser
@@ -142,9 +142,10 @@ class ExtractionService:
             # Determine initial image_url (from extraction source)
             initial_image_url = source_urls[0] if source_urls else None
 
-            # Step 4: Generate AI image for non-URL sources (75-85% range)
-            # URL sources already have images from scraping
-            if source_type != SourceType.URL:
+            # Step 4: Generate AI image for non-webpage sources (75-85% range)
+            # LINK sources with webpages already have images from scraping
+            # Check if this is NOT a LINK type (which would be handled by LinkExtractor)
+            if source_type != SourceType.LINK:
                 if job_id:
                     await self._update_job_status(
                         job_id,
@@ -245,8 +246,8 @@ class ExtractionService:
             SourceType.VIDEO: VideoExtractor,
             SourceType.PHOTO: PhotoExtractor,
             SourceType.VOICE: VoiceExtractor,
-            SourceType.URL: URLExtractor,
-            SourceType.PASTE: PasteExtractor
+            SourceType.PASTE: PasteExtractor,
+            SourceType.LINK: LinkExtractor,
         }
 
         extractor_class = extractors.get(source_type)
@@ -393,12 +394,33 @@ class ExtractionService:
                     "Starting extraction"
                 )
 
-            # For video sources, check for duplicates first
-            if source_type == SourceType.VIDEO and isinstance(source, str):
-                duplicate_check = await self._check_video_duplicate(source)
+            # Check for duplicates based on source type
+            if isinstance(source, str):
+                is_video_url = (
+                    source_type == SourceType.VIDEO or
+                    (source_type == SourceType.LINK and VideoURLParser.is_video_url(source))
+                )
+                is_regular_url = (
+                    source_type == SourceType.LINK and not VideoURLParser.is_video_url(source)
+                )
+
+                duplicate_check = None
+
+                # Check video duplicates for video URLs
+                if is_video_url:
+                    duplicate_check = await self._check_video_duplicate(source)
+                    if duplicate_check:
+                        logger.info(f"Video duplicate found: {duplicate_check['recipe_id']}")
+
+                # Check URL duplicates for regular URLs
+                elif is_regular_url:
+                    duplicate_check = await self._check_url_duplicate(source)
+                    if duplicate_check:
+                        logger.info(f"URL duplicate found: {duplicate_check['recipe_id']}")
+
+                # Return early if duplicate found
                 if duplicate_check:
                     existing_recipe_id = duplicate_check["recipe_id"]
-                    # Update job status
                     if job_id:
                         await self._update_job_status(
                             job_id,
@@ -408,7 +430,6 @@ class ExtractionService:
                             existing_recipe_id=existing_recipe_id
                         )
 
-                    logger.info(f"Video duplicate found: {existing_recipe_id}")
                     return {
                         "job_id": None,  # No job needed for duplicates
                         "status": "duplicate",
@@ -473,11 +494,20 @@ class ExtractionService:
             source_urls = raw_content.get("source_urls", [source_url] if source_url else [])
             initial_image_url = source_urls[0] if source_urls else None
 
-            # Step 4: Generate AI image for non-URL sources (75-85% range)
-            if source_type == SourceType.VIDEO:
+            # Step 4: Handle image based on source type (75-85% range)
+            # For LINK type, check detected_type to determine handling
+            detected_type = raw_content.get("detected_type")
+            is_video_content = source_type == SourceType.VIDEO or detected_type == "video"
+            is_url_content = detected_type == "url"
+
+            if is_video_content:
                 # For video, use thumbnail from metadata
                 initial_image_url = raw_content.get("thumbnail_url") or initial_image_url
-            elif source_type != SourceType.URL:
+            elif is_url_content:
+                # For URL/webpage, use extracted image from page
+                initial_image_url = raw_content.get("image_url") or initial_image_url
+            else:
+                # For other types (photo, voice, paste), generate AI image
                 if job_id:
                     await self._update_job_status(
                         job_id,
@@ -510,9 +540,9 @@ class ExtractionService:
                 "image_url": initial_image_url,
             }
 
-            # Build video metadata if applicable
+            # Build video metadata if applicable (for VIDEO type or LINK that detected video)
             video_metadata = None
-            if source_type == SourceType.VIDEO:
+            if is_video_content:
                 video_metadata = self._build_video_metadata(raw_content, source)
 
             # Log extraction stats if available
@@ -608,6 +638,18 @@ class ExtractionService:
             platform=parsed.platform.value,
             platform_video_id=parsed.video_id
         )
+
+    async def _check_url_duplicate(self, url: str) -> Optional[Dict[str, Any]]:
+        """
+        Check if a URL has already been extracted as a recipe.
+
+        Args:
+            url: URL to check
+
+        Returns:
+            Dict with recipe_id, is_public, created_by if duplicate found, None otherwise
+        """
+        return await self.recipe_repo.find_by_source_url(url)
 
     def _build_video_metadata(
         self,

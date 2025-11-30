@@ -171,13 +171,16 @@ class VideoURLParser:
         """
         Check if a URL is a supported video platform URL.
 
+        This includes both direct video URLs and short URLs that redirect
+        to video content (like vm.tiktok.com).
+
         Args:
             url: The URL to check
 
         Returns:
             True if URL matches a supported video platform
         """
-        return cls.parse(url) is not None
+        return cls.parse(url) is not None or cls.is_short_url(url)
 
     @classmethod
     def is_short_url(cls, url: str) -> bool:

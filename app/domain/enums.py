@@ -6,11 +6,11 @@ from enum import Enum
 
 class SourceType(str, Enum):
     """Recipe source types"""
-    VIDEO = "video"  # TikTok, Reels, Shorts
+    VIDEO = "video"  # Deprecated - use LINK instead
     PHOTO = "photo"
     VOICE = "voice"
-    URL = "url"
-    PASTE = "paste"  # Smart copy/paste
+    PASTE = "paste"
+    LINK = "link"  # Auto-detects video vs webpage
 
 
 class DifficultyLevel(str, Enum):

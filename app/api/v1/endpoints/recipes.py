@@ -677,7 +677,7 @@ async def _format_recipe_response(
 
     # Get video platform if recipe is from a video
     video_platform = None
-    if recipe.get("source_type") == "video":
+    if recipe.get("source_type") in ("video", "link"):
         from app.repositories.video_source_repository import VideoSourceRepository
         video_repo = VideoSourceRepository(supabase)
         video_source = await video_repo.get_by_recipe(recipe["id"])
@@ -752,7 +752,7 @@ async def _format_list_item_response(
 
     # Get video platform if recipe is from a video
     video_platform = None
-    if recipe.get("source_type") == "video":
+    if recipe.get("source_type") in ("video", "link"):
         from app.repositories.video_source_repository import VideoSourceRepository
         video_repo = VideoSourceRepository(supabase)
         video_source = await video_repo.get_by_recipe(recipe["id"])

@@ -196,7 +196,7 @@ class ExtractionService:
             SourceType.VIDEO: VideoExtractor,
             SourceType.PHOTO: PhotoExtractor,
             SourceType.VOICE: VoiceExtractor,
-            SourceType.URL: URLExtractor,
+            SourceType.LINK: LinkExtractor,
             SourceType.PASTE: PasteExtractor,
             SourceType.MY_SOURCE: MySourceExtractor,  # Add this
         }

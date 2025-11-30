@@ -2,6 +2,7 @@
 Recipe repository for database operations
 """
 from typing import Optional, List, Dict, Any
+from urllib.parse import urlparse, urlunparse
 from supabase import Client
 import logging
 
@@ -15,6 +16,80 @@ class RecipeRepository(BaseRepository):
 
     def __init__(self, supabase: Client):
         super().__init__(supabase, "recipes")
+
+    @staticmethod
+    def normalize_url(url: str) -> str:
+        """
+        Normalize a URL for duplicate detection.
+
+        Removes query parameters, fragments, and trailing slashes.
+        Converts to lowercase for consistent comparison.
+
+        Args:
+            url: URL to normalize
+
+        Returns:
+            Normalized URL string
+        """
+        if not url:
+            return url
+        try:
+            parsed = urlparse(url.lower().strip())
+            # Remove query params, fragments, and normalize path
+            path = parsed.path.rstrip('/')
+            normalized = urlunparse((
+                parsed.scheme,
+                parsed.netloc,
+                path,
+                '',  # params
+                '',  # query
+                ''   # fragment
+            ))
+            return normalized
+        except Exception:
+            return url.lower().strip()
+
+    async def find_by_source_url(self, source_url: str) -> Optional[Dict[str, Any]]:
+        """
+        Find a recipe by its source URL for duplicate detection.
+
+        Normalizes the URL before searching to handle variations
+        (query params, trailing slashes, etc.).
+
+        Args:
+            source_url: URL to search for
+
+        Returns:
+            Recipe dict with id, title, image_url, is_public, created_by
+            or None if not found
+        """
+        try:
+            normalized_url = self.normalize_url(source_url)
+
+            # Search for recipes with matching source_url
+            # We check both the exact URL and normalized versions
+            response = self.supabase.table(self.table_name)\
+                .select("id, title, image_url, is_public, created_by, source_url")\
+                .eq("is_draft", False)\
+                .not_.is_("source_url", "null")\
+                .execute()
+
+            # Check each recipe's normalized URL
+            for recipe in response.data or []:
+                if recipe.get("source_url"):
+                    if self.normalize_url(recipe["source_url"]) == normalized_url:
+                        return {
+                            "recipe_id": recipe["id"],
+                            "title": recipe.get("title"),
+                            "image_url": recipe.get("image_url"),
+                            "is_public": recipe.get("is_public"),
+                            "created_by": recipe.get("created_by")
+                        }
+
+            return None
+        except Exception as e:
+            logger.error(f"Error finding recipe by source URL: {str(e)}")
+            return None
 
     async def get_with_contributors(self, recipe_id: str) -> Optional[Dict[str, Any]]:
         """Get recipe with contributor information"""

@@ -246,7 +246,8 @@ class RecipeSaveService:
             image_source = None
             if source_type == SourceType.VIDEO and video_metadata:
                 image_source = "video_thumbnail"
-            elif source_type == SourceType.URL:
+            elif source_type == SourceType.LINK and not video_metadata:
+                # LINK type without video metadata = webpage extraction
                 image_source = "scraped"
             elif extracted_data.get("image_url"):
                 image_source = "generated"
@@ -257,7 +258,8 @@ class RecipeSaveService:
 
             # Clean source URL for video extractions (remove tracking params)
             clean_source_url = source_url
-            if source_type == SourceType.VIDEO and source_url:
+            if source_url and video_metadata:
+                # Video URLs (either VIDEO or LINK type with video) should be cleaned
                 clean_source_url = VideoURLParser.clean_url(source_url)
 
             # Prepare recipe data - as DRAFT
@@ -294,14 +296,15 @@ class RecipeSaveService:
                 "order": 0
             }).execute()
 
-            # Handle video-specific records in background (fire-and-forget)
-            # This doesn't block the response - video metadata is supplementary
-            if source_type == SourceType.VIDEO and video_metadata:
-                asyncio.create_task(self._create_video_records_background(
+            # Create video-specific records if video metadata present
+            # We await this to ensure video_sources table is populated before returning
+            # This allows the recipe endpoint to query for video_platform immediately
+            if video_metadata:
+                await self._create_video_records_background(
                     recipe_id=recipe_id,
                     video_metadata=video_metadata,
                     source_url=source_url
-                ))
+                )
 
             # Update job with recipe_id if provided
             if job_id:
