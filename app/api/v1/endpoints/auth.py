@@ -148,13 +148,13 @@ async def sign_in_anonymously(
     response_model=MessageResponse,
     status_code=status.HTTP_200_OK,
     summary="Link Email to Anonymous Account",
-    description="Convert anonymous user to authenticated by linking an email identity. Sends magic link for verification.",
+    description="Convert anonymous user to authenticated by linking an email identity. Sends OTP code for verification.",
     responses={
         200: {
-            "description": "Magic link sent for email verification",
+            "description": "OTP code sent for email verification",
             "content": {
                 "application/json": {
-                    "example": {"message": "Check your email! We've sent you a verification link to complete the upgrade."}
+                    "example": {"message": "Check your email! We've sent you a verification code to complete the upgrade."}
                 }
             }
         },
@@ -178,8 +178,8 @@ async def link_email_identity(
 
     **Flow:**
     1. Anonymous user calls this endpoint with desired email
-    2. System sends magic link to that email
-    3. User clicks link in email
+    2. System sends 6-digit OTP code to that email
+    3. User enters OTP code in app
     4. Call `/auth/email/verify` to complete the linking
     5. Same UUID is kept, `is_anonymous` becomes `false`
     6. All recipes/cookbooks remain linked to the user
@@ -193,7 +193,7 @@ async def link_email_identity(
     **What Changes:**
     - `is_anonymous` becomes `false`
     - Email is added to the account
-    - User can now sign in with email magic link on other devices
+    - User can now sign in with email OTP on other devices
 
     **Important:**
     - This is a one-way operation (cannot revert to anonymous)
@@ -234,7 +234,7 @@ async def link_email_identity(
         })
 
         return MessageResponse(
-            message="Check your email! We've sent you a verification link to complete the upgrade."
+            message="Check your email! We've sent you a verification code to complete the upgrade."
         )
 
     except HTTPException:
@@ -347,59 +347,58 @@ async def link_phone_identity(
 
 
 # ============================================================================
-# EMAIL MAGIC LINK AUTHENTICATION (UNIFIED LOGIN/SIGNUP)
+# EMAIL OTP AUTHENTICATION (UNIFIED LOGIN/SIGNUP)
 # ============================================================================
 
 @router.post(
     "/email",
     response_model=MessageResponse,
     status_code=status.HTTP_200_OK,
-    summary="Request Email Magic Link",
-    description="Send a magic link to the user's email for passwordless authentication. Automatically creates user if they don't exist.",
+    summary="Request Email OTP",
+    description="Send a 6-digit OTP code to the user's email for passwordless authentication. Automatically creates user if they don't exist.",
     responses={
         200: {
-            "description": "Magic link sent successfully",
+            "description": "OTP code sent successfully",
             "content": {
                 "application/json": {
-                    "example": {"message": "Check your email! We've sent you a magic link to sign in."}
+                    "example": {"message": "Check your email! We've sent you a verification code."}
                 }
             }
         }
     }
 )
-async def authenticate_with_email(
+async def send_email_otp(
     request: EmailAuthRequest,
     supabase: Client = Depends(get_supabase_client)
 ):
     """
-    ## Email Magic Link Authentication (Unified Login/Signup)
+    ## Email OTP Authentication (Unified Login/Signup)
 
-    Sends a one-time use magic link to the provided email address.
+    Sends a 6-digit one-time password to the provided email address.
 
     **Key Features:**
     - Unified endpoint for both login and signup
     - Automatically creates user if they don't exist
     - No password required
-    - Magic link expires in 1 hour
+    - OTP expires in 3 minutes
     - Rate limited to prevent abuse
 
     **Flow:**
     1. User submits their email
-    2. System sends magic link to email
-    3. User clicks link in email
-    4. User is redirected to your app with token
-    5. Call `/auth/email/verify` to complete authentication
+    2. System sends 6-digit OTP code to email
+    3. User enters OTP code in app
+    4. Call `/auth/email/verify` with the OTP code to complete authentication
 
     **Security:**
     - Returns generic success message to prevent email enumeration
-    - One-time use tokens
-    - PKCE flow supported
+    - One-time use codes
+    - Time-limited validity (3 minutes)
     """
     try:
         from app.core.config import get_settings
         settings = get_settings()
 
-        # sign_in_with_otp creates user if doesn't exist, sends magic link for both cases
+        # sign_in_with_otp creates user if doesn't exist, sends OTP for both cases
         response = supabase.auth.sign_in_with_otp({
             "email": request.email,
             "options": {
@@ -408,17 +407,20 @@ async def authenticate_with_email(
             }
         })
 
+        logger.info(f"OTP email sent successfully to {request.email}")
+
         return MessageResponse(
-            message="Check your email! We've sent you a magic link to sign in."
+            message="Check your email! We've sent you a verification code."
         )
 
     except Exception as e:
         error_message = str(e)
-        logger.error(f"Email authentication error: {error_message}")
+        logger.error(f"Email OTP send error for {request.email}: {error_message}")
+        logger.exception(e)  # Log full stack trace
 
         # Return generic message to prevent email enumeration
         return MessageResponse(
-            message="Check your email! We've sent you a magic link to sign in."
+            message="Check your email! We've sent you a verification code."
         )
 
 
@@ -426,8 +428,8 @@ async def authenticate_with_email(
     "/email/verify",
     response_model=AuthResponse,
     status_code=status.HTTP_200_OK,
-    summary="Verify Email Magic Link",
-    description="Verify the magic link token from email and complete authentication",
+    summary="Verify Email OTP",
+    description="Verify the 6-digit OTP code from email and complete authentication",
     responses={
         200: {
             "description": "Authentication successful",
@@ -450,20 +452,21 @@ async def authenticate_with_email(
                 }
             }
         },
-        400: {"description": "Invalid or expired magic link"}
+        400: {"description": "Invalid or expired OTP code"}
     }
 )
-async def verify_email_magic_link(
+async def verify_email_otp(
     request: VerifyEmailOTPRequest,
     supabase: Client = Depends(get_supabase_client)
 ):
     """
-    ## Verify Email Magic Link
+    ## Verify Email OTP
 
-    Validates the magic link token and returns authentication tokens.
+    Validates the 6-digit OTP code and returns authentication tokens.
 
     **Request Body:**
-    - `token_hash`: The token from the magic link URL
+    - `email`: The email address that received the OTP
+    - `token`: The 6-digit OTP code from email
     - `type`: Must be "email"
 
     **Response:**
@@ -477,14 +480,15 @@ async def verify_email_magic_link(
     """
     try:
         response = supabase.auth.verify_otp({
-            "token_hash": request.token_hash,
+            "email": request.email,
+            "token": request.token,
             "type": request.type
         })
 
         if not response.user or not response.session:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid or expired magic link"
+                detail="Invalid or expired OTP code"
             )
 
         # Check if user is new by querying database (source of truth)
@@ -520,10 +524,10 @@ async def verify_email_magic_link(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Email verification error: {str(e)}")
+        logger.error(f"Email OTP verification error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Magic link verification failed. The link may be invalid or expired."
+            detail="OTP verification failed. The code may be invalid or expired."
         )
 
 

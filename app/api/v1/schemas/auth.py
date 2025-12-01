@@ -11,8 +11,8 @@ from typing import Optional
 # ============================================================================
 
 class EmailAuthRequest(BaseModel):
-    """Email magic link authentication request (unified login/signup)"""
-    email: EmailStr = Field(..., examples=["user@example.com"], description="Email address to send magic link")
+    """Email OTP authentication request (unified login/signup)"""
+    email: EmailStr = Field(..., examples=["user@example.com"], description="Email address to send OTP code")
 
     model_config = {
         "json_schema_extra": {
@@ -42,14 +42,16 @@ class PhoneAuthRequest(BaseModel):
 
 
 class VerifyEmailOTPRequest(BaseModel):
-    """Verify email magic link token"""
-    token_hash: str = Field(..., examples=["abc123def456"], description="Token hash from magic link URL")
+    """Verify email OTP code"""
+    email: EmailStr = Field(..., examples=["user@example.com"], description="Email address that received the OTP")
+    token: str = Field(..., min_length=6, max_length=6, examples=["123456"], description="6-digit OTP code from email")
     type: str = Field(default="email", examples=["email"], description="Verification type")
 
     model_config = {
         "json_schema_extra": {
             "example": {
-                "token_hash": "abc123def456",
+                "email": "user@example.com",
+                "token": "123456",
                 "type": "email"
             }
         }
