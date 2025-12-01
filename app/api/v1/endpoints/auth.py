@@ -1030,10 +1030,14 @@ async def submit_onboarding(
 
         if not user_result.data:
             # If users table record doesn't exist, create it
+            # Use display_name as name if provided, otherwise use email username
+            default_name = request.display_name or current_user.get("email", "").split("@")[0] or "User"
+
             user_insert = {
                 "id": user_id,
                 "email": current_user.get("email"),
                 "phone": current_user.get("phone"),
+                "name": default_name,  # Required field
                 "onboarding_completed": True
             }
             user_result = admin_client.from_("users").insert(user_insert).execute()
