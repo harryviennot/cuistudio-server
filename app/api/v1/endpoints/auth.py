@@ -1035,9 +1035,7 @@ async def submit_onboarding(
 
             user_insert = {
                 "id": user_id,
-                "email": current_user.get("email"),
-                "phone": current_user.get("phone"),
-                "name": default_name,  # Required field
+                "name": default_name,
                 "onboarding_completed": True
             }
             user_result = admin_client.from_("users").insert(user_insert).execute()
