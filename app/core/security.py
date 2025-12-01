@@ -45,16 +45,20 @@ async def get_current_user(
 
         user = user_response.user
 
-        # Check if user has completed profile by querying database (source of truth)
+        # Check if user has completed onboarding by querying database (source of truth)
         is_new_user = True
         try:
-            profile_result = supabase.from_("users").select("id, profile_completed").eq("id", user.id).execute()
-            # User has profile if record exists in database
-            is_new_user = len(profile_result.data) == 0
+            user_result = supabase.from_("users").select("id, onboarding_completed").eq("id", user.id).execute()
+            if user_result.data:
+                # User exists in database, check onboarding status
+                is_new_user = not user_result.data[0].get("onboarding_completed", False)
+            else:
+                # User doesn't exist in users table yet, definitely new
+                is_new_user = True
         except Exception as e:
-            logger.warning(f"Failed to check profile completion status: {e}")
-            # Fallback to metadata if database check fails
-            is_new_user = not user.user_metadata.get("profile_completed", False)
+            logger.warning(f"Failed to check onboarding completion status: {e}")
+            # Default to new user if check fails
+            is_new_user = True
 
         return {
             "id": user.id,

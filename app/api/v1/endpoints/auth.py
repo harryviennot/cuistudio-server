@@ -14,6 +14,7 @@ from app.api.v1.schemas.auth import (
     VerifyPhoneOTPRequest,
     CompleteProfileRequest,
     UpdateProfileRequest,
+    SubmitOnboardingRequest,
     RefreshTokenRequest,
     LinkEmailIdentityRequest,
     LinkPhoneIdentityRequest,
@@ -457,7 +458,8 @@ async def send_email_otp(
 )
 async def verify_email_otp(
     request: VerifyEmailOTPRequest,
-    supabase: Client = Depends(get_supabase_client)
+    supabase: Client = Depends(get_supabase_client),
+    admin_client: Client = Depends(get_supabase_admin_client)
 ):
     """
     ## Verify Email OTP
@@ -472,10 +474,10 @@ async def verify_email_otp(
     **Response:**
     - Returns JWT access token and refresh token
     - Includes user information with `is_new_user` flag
-    - If `is_new_user` is true, frontend should redirect to profile completion
+    - If `is_new_user` is true, frontend should redirect to onboarding
 
     **Next Steps:**
-    - If `is_new_user === true`: Call `/auth/profile/complete`
+    - If `is_new_user === true`: Call `/auth/onboarding`
     - If `is_new_user === false`: User is fully authenticated, proceed to app
     """
     try:
@@ -491,16 +493,20 @@ async def verify_email_otp(
                 detail="Invalid or expired OTP code"
             )
 
-        # Check if user is new by querying database (source of truth)
+        # Check if user is new by checking onboarding completion (source of truth)
         is_new_user = True
         try:
-            profile_result = supabase.from_("users").select("id").eq("id", response.user.id).execute()
-            is_new_user = len(profile_result.data) == 0
+            user_result = admin_client.from_("users").select("onboarding_completed").eq("id", response.user.id).execute()
+            if user_result.data:
+                # User exists in database, check onboarding status
+                is_new_user = not user_result.data[0].get("onboarding_completed", False)
+            else:
+                # User doesn't exist in users table yet, definitely new
+                is_new_user = True
         except Exception as e:
-            logger.warning(f"Failed to check profile status: {e}")
-            # Fallback to metadata if database check fails
-            user_metadata = response.user.user_metadata or {}
-            is_new_user = not user_metadata.get("profile_completed", False)
+            logger.warning(f"Failed to check onboarding status: {e}")
+            # Default to new user if check fails
+            is_new_user = True
 
         user_data = UserResponse(
             id=response.user.id,
@@ -638,7 +644,8 @@ async def authenticate_with_phone(
 )
 async def verify_phone_otp(
     request: VerifyPhoneOTPRequest,
-    supabase: Client = Depends(get_supabase_client)
+    supabase: Client = Depends(get_supabase_client),
+    admin_client: Client = Depends(get_supabase_admin_client)
 ):
     """
     ## Verify Phone OTP
@@ -654,7 +661,7 @@ async def verify_phone_otp(
     - Includes user information with `is_new_user` flag
 
     **Next Steps:**
-    - If `is_new_user === true`: Call `/auth/profile/complete`
+    - If `is_new_user === true`: Call `/auth/onboarding`
     - If `is_new_user === false`: User is fully authenticated, proceed to app
     """
     try:
@@ -670,16 +677,20 @@ async def verify_phone_otp(
                 detail="Invalid OTP code"
             )
 
-        # Check if user is new by querying database (source of truth)
+        # Check if user is new by checking onboarding completion (source of truth)
         is_new_user = True
         try:
-            profile_result = supabase.from_("users").select("id").eq("id", response.user.id).execute()
-            is_new_user = len(profile_result.data) == 0
+            user_result = admin_client.from_("users").select("onboarding_completed").eq("id", response.user.id).execute()
+            if user_result.data:
+                # User exists in database, check onboarding status
+                is_new_user = not user_result.data[0].get("onboarding_completed", False)
+            else:
+                # User doesn't exist in users table yet, definitely new
+                is_new_user = True
         except Exception as e:
-            logger.warning(f"Failed to check profile status: {e}")
-            # Fallback to metadata if database check fails
-            user_metadata = response.user.user_metadata or {}
-            is_new_user = not user_metadata.get("profile_completed", False)
+            logger.warning(f"Failed to check onboarding status: {e}")
+            # Default to new user if check fails
+            is_new_user = True
 
         user_data = UserResponse(
             id=response.user.id,
@@ -923,6 +934,132 @@ async def update_profile(
 
 
 # ============================================================================
+# ONBOARDING QUESTIONNAIRE
+# ============================================================================
+
+@router.post(
+    "/onboarding",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Submit Onboarding Questionnaire",
+    description="Submit required onboarding questionnaire for new users. Tracks marketing and user preference data.",
+    responses={
+        200: {
+            "description": "Onboarding completed successfully",
+            "content": {
+                "application/json": {
+                    "example": {"message": "Onboarding completed successfully!"}
+                }
+            }
+        },
+        400: {"description": "Validation error or onboarding already completed"},
+        401: {"description": "Not authenticated"}
+    }
+)
+async def submit_onboarding(
+    request: SubmitOnboardingRequest,
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client),
+    admin_client: Client = Depends(get_supabase_admin_client)
+):
+    """
+    ## Submit Onboarding Questionnaire
+
+    Captures required onboarding data for new users including marketing attribution
+    and user preferences. Must be completed before accessing the main app.
+
+    **Required Fields:**
+    - `heard_from`: How user discovered the app (social_media, friend, app_store, blog, search_engine, other)
+    - `cooking_frequency`: How often user cooks (rarely, occasionally, regularly, almost_daily)
+    - `recipe_sources`: Where user gets recipes (array: tiktok, instagram, youtube, blogs, cookbooks, family, other)
+
+    **Optional Fields:**
+    - `display_name`: User's preferred display name
+    - `age`: User's age (13-120)
+
+    **Data Usage:**
+    - Marketing attribution tracking
+    - User personalization
+    - Feature usage analytics
+
+    **Authentication:**
+    - Requires valid JWT access token in Authorization header
+    - Format: `Authorization: Bearer <access_token>`
+
+    **After Completion:**
+    - User's `onboarding_completed` flag is set to `true`
+    - User can now access the full application
+    - `/auth/me` will return `is_new_user: false`
+    """
+    try:
+        user_id = current_user["id"]
+
+        # Check if onboarding already completed
+        existing = admin_client.from_("user_onboarding").select("id").eq("user_id", user_id).execute()
+        if existing.data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Onboarding already completed"
+            )
+
+        # Insert onboarding data
+        onboarding_record = {
+            "user_id": user_id,
+            "heard_from": request.heard_from,
+            "cooking_frequency": request.cooking_frequency,
+            "recipe_sources": request.recipe_sources,
+            "display_name": request.display_name,
+            "age": request.age
+        }
+
+        onboarding_result = admin_client.from_("user_onboarding").insert(onboarding_record).execute()
+
+        if not onboarding_result.data:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to save onboarding data"
+            )
+
+        # Mark onboarding as completed in users table
+        user_update = {
+            "onboarding_completed": True,
+            "updated_at": "now()"
+        }
+
+        user_result = admin_client.from_("users").update(user_update).eq("id", user_id).execute()
+
+        if not user_result.data:
+            # If users table record doesn't exist, create it
+            user_insert = {
+                "id": user_id,
+                "email": current_user.get("email"),
+                "phone": current_user.get("phone"),
+                "onboarding_completed": True
+            }
+            user_result = admin_client.from_("users").insert(user_insert).execute()
+
+            if not user_result.data:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to update user onboarding status"
+                )
+
+        logger.info(f"Onboarding completed for user {user_id}")
+
+        return MessageResponse(message="Onboarding completed successfully!")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_message = str(e)
+        logger.error(f"Onboarding submission error: {error_message}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to complete onboarding: {error_message}"
+        )
+
+
+# ============================================================================
 # SESSION MANAGEMENT
 # ============================================================================
 
@@ -1060,7 +1197,8 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 )
 async def refresh_token(
     request: RefreshTokenRequest,
-    supabase: Client = Depends(get_supabase_client)
+    supabase: Client = Depends(get_supabase_client),
+    admin_client: Client = Depends(get_supabase_admin_client)
 ):
     """
     ## Refresh Access Token
@@ -1093,16 +1231,20 @@ async def refresh_token(
                 detail="Invalid refresh token"
             )
 
-        # Check if user is new by querying database (source of truth)
+        # Check if user is new by checking onboarding completion (source of truth)
         is_new_user = True
         try:
-            profile_result = supabase.from_("users").select("id").eq("id", response.user.id).execute()
-            is_new_user = len(profile_result.data) == 0
+            user_result = admin_client.from_("users").select("onboarding_completed").eq("id", response.user.id).execute()
+            if user_result.data:
+                # User exists in database, check onboarding status
+                is_new_user = not user_result.data[0].get("onboarding_completed", False)
+            else:
+                # User doesn't exist in users table yet, definitely new
+                is_new_user = True
         except Exception as e:
-            logger.warning(f"Failed to check profile status: {e}")
-            # Fallback to metadata if database check fails
-            user_metadata = response.user.user_metadata or {}
-            is_new_user = not user_metadata.get("profile_completed", False)
+            logger.warning(f"Failed to check onboarding status: {e}")
+            # Default to new user if check fails
+            is_new_user = True
 
         user_data = UserResponse(
             id=response.user.id,

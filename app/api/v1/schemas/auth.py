@@ -142,6 +142,31 @@ class RefreshTokenRequest(BaseModel):
 
 
 # ============================================================================
+# ONBOARDING
+# ============================================================================
+
+class SubmitOnboardingRequest(BaseModel):
+    """Submit onboarding questionnaire"""
+    heard_from: str = Field(..., description="How user heard about app")
+    cooking_frequency: str = Field(..., description="How often user cooks")
+    recipe_sources: list[str] = Field(..., description="Where user gets recipes")
+    display_name: Optional[str] = Field(None, description="Optional display name")
+    age: Optional[int] = Field(None, ge=13, le=120, description="User's age")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "heard_from": "social_media",
+                "cooking_frequency": "regularly",
+                "recipe_sources": ["tiktok", "instagram", "youtube"],
+                "display_name": "John",
+                "age": 25
+            }
+        }
+    }
+
+
+# ============================================================================
 # IDENTITY LINKING (ANONYMOUS TO AUTHENTICATED)
 # ============================================================================
 
