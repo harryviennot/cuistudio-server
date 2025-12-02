@@ -12,7 +12,7 @@ import json
 import time
 
 from app.core.database import get_supabase_client, get_supabase_admin_client, get_supabase_user_client
-from app.core.security import get_current_user
+from app.core.security import get_current_user, get_authenticated_user
 from app.core.events import get_event_broadcaster
 from app.services.extraction_service import ExtractionService
 from app.services.upload_service import UploadService
@@ -48,7 +48,7 @@ async def submit_extraction(
     extraction_request: ExtractionSubmitRequest,
     http_request: Request,
     background_tasks: BackgroundTasks,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_authenticated_user),
     user_client: Client = Depends(get_supabase_user_client),
     admin_client: Client = Depends(get_supabase_admin_client)
 ):
@@ -116,7 +116,7 @@ async def submit_image_extraction(
     request: Request,
     files: List[UploadFile] = File(..., description=f"Recipe images (max {MAX_IMAGES_PER_EXTRACTION})"),
     background_tasks: BackgroundTasks = None,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_authenticated_user),
     user_client: Client = Depends(get_supabase_user_client),
     admin_client: Client = Depends(get_supabase_admin_client)
 ):

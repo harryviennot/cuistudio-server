@@ -7,7 +7,7 @@ from typing import List, Optional, Dict, Any
 import logging
 
 from app.core.database import get_supabase_client, get_supabase_admin_client
-from app.core.security import get_current_user, get_current_user_optional
+from app.core.security import get_current_user, get_current_user_optional, get_authenticated_user
 from app.repositories.recipe_repository import RecipeRepository
 from app.repositories.user_recipe_repository import UserRecipeRepository
 from app.services.openai_service import OpenAIService
@@ -42,7 +42,7 @@ router = APIRouter(prefix="/recipes", tags=["Recipes"])
 @router.post("", response_model=RecipeResponse, status_code=status.HTTP_201_CREATED)
 async def create_recipe(
     recipe_data: RecipeCreateRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_authenticated_user),
     supabase: Client = Depends(get_supabase_client)
 ):
     """Create a new recipe manually"""
@@ -92,7 +92,7 @@ async def create_recipe(
 @router.post("/save", response_model=SaveRecipeResponse, status_code=status.HTTP_201_CREATED)
 async def save_recipe(
     save_request: SaveRecipeRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_authenticated_user),
     supabase: Client = Depends(get_supabase_admin_client)
 ):
     """
@@ -332,7 +332,7 @@ async def get_my_recipes(
 async def update_recipe(
     recipe_id: str,
     update_data: RecipeUpdateRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_authenticated_user),
     supabase: Client = Depends(get_supabase_client)
 ):
     """Update a recipe"""
@@ -410,7 +410,7 @@ async def update_recipe(
 @router.delete("/{recipe_id}", response_model=MessageResponse)
 async def delete_recipe(
     recipe_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_authenticated_user),
     supabase: Client = Depends(get_supabase_admin_client)
 ):
     """Delete a recipe (owner only, drafts can always be deleted)"""
@@ -455,7 +455,7 @@ async def delete_recipe(
 async def fork_recipe(
     recipe_id: str,
     fork_data: RecipeForkRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_authenticated_user),
     supabase: Client = Depends(get_supabase_client)
 ):
     """Fork a recipe"""

@@ -34,110 +34,36 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 @router.post(
     "/anonymous",
     response_model=AuthResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Anonymous Sign-in",
-    description="Sign in anonymously without providing any credentials. Returns persistent user identity.",
+    status_code=status.HTTP_410_GONE,
+    summary="Anonymous Sign-in (Deprecated)",
+    description="Anonymous authentication is no longer supported. Please use email or phone authentication.",
     responses={
-        200: {
-            "description": "Anonymous sign-in successful",
+        410: {
+            "description": "Anonymous authentication is no longer supported",
             "content": {
                 "application/json": {
                     "example": {
-                        "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
-                        "refresh_token": "v1.MR45tLN-Io...",
-                        "token_type": "bearer",
-                        "expires_in": 3600,
-                        "user": {
-                            "id": "uuid-here",
-                            "email": None,
-                            "phone": None,
-                            "created_at": "2024-01-01T00:00:00Z",
-                            "user_metadata": {},
-                            "is_new_user": True,
-                            "is_anonymous": True
-                        }
+                        "detail": "Anonymous authentication is no longer supported. Please sign in with email or phone."
                     }
                 }
             }
         }
     }
 )
-async def sign_in_anonymously(
-    supabase: Client = Depends(get_supabase_client)
-):
+async def sign_in_anonymously():
     """
-    ## Anonymous Sign-in
+    ## Anonymous Sign-in (DEPRECATED)
 
-    Creates a persistent anonymous user identity without requiring any credentials.
+    Anonymous authentication has been disabled. Users must authenticate with email or phone.
 
-    **Key Features:**
-    - No email, phone, or password required
-    - User gets a permanent UUID that persists across sessions
-    - JWT tokens work the same as authenticated users
-    - User can be upgraded to authenticated later via identity linking
-    - Anonymous users can create recipes and cookbooks
-
-    **Use Cases:**
-    - First-time app users who want to try features before signing up
-    - Users who want to create recipes without creating an account
-    - Temporary sessions that can be upgraded later
-
-    **Token Storage:**
-    - Frontend should store access_token and refresh_token securely
-    - Tokens persist the anonymous user's session
-    - When user reopens app, use stored tokens to maintain identity
-
-    **Upgrading to Authenticated:**
-    - Call `/auth/link-identity/email` or `/auth/link-identity/phone`
-    - Same UUID is kept, just adds email/phone identity
-    - All created recipes/cookbooks remain linked to the user
-
-    **Session Persistence:**
-    - As long as tokens are stored on device, user maintains same identity
-    - If app is uninstalled, tokens are lost and user gets new identity on reinstall
-    - Encourage users to link email/phone to prevent data loss
-
-    **RLS Behavior:**
-    - Anonymous users have `auth.uid()` just like authenticated users
-    - They can create/read/update their own data
-    - Subject to same Row Level Security policies
+    **Alternative Authentication Methods:**
+    - Use `/auth/email` to request an OTP code via email
+    - Use `/auth/phone` to request an OTP code via SMS
     """
-    try:
-        # Sign in anonymously via Supabase
-        response = supabase.auth.sign_in_anonymously()
-
-        if not response.user or not response.session:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create anonymous session"
-            )
-
-        # Anonymous users are always "new" on creation
-        user_data = UserResponse(
-            id=response.user.id,
-            email=response.user.email,
-            phone=response.user.phone,
-            created_at=response.user.created_at,
-            user_metadata=response.user.user_metadata or {},
-            is_new_user=True,  # Anonymous users start as "new"
-            is_anonymous=True  # Mark as anonymous
-        )
-
-        return AuthResponse(
-            access_token=response.session.access_token,
-            refresh_token=response.session.refresh_token,
-            token_type="bearer",
-            user=user_data,
-            expires_in=response.session.expires_in or 3600,
-            expires_at=response.session.expires_at
-        )
-
-    except Exception as e:
-        logger.error(f"Anonymous sign-in error: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Anonymous sign-in failed: {str(e)}"
-        )
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Anonymous authentication is no longer supported. Please sign in with email or phone."
+    )
 
 
 # ============================================================================
@@ -1194,7 +1120,8 @@ async def get_me(current_user: dict = Depends(get_current_user)):
                 }
             }
         },
-        401: {"description": "Invalid or expired refresh token"}
+        401: {"description": "Invalid or expired refresh token"},
+        403: {"description": "Anonymous users cannot refresh tokens"}
     }
 )
 async def refresh_token(
@@ -1223,6 +1150,9 @@ async def refresh_token(
     - Store refresh token securely (encrypted storage)
     - Implement automatic token refresh on 401 errors
     - Never expose refresh tokens in URLs or logs
+
+    **Note:**
+    - Anonymous users cannot refresh tokens. They must authenticate with email or phone.
     """
     try:
         response = supabase.auth.refresh_session(request.refresh_token)
@@ -1231,6 +1161,14 @@ async def refresh_token(
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid refresh token"
+            )
+
+        # Block anonymous users from refreshing tokens
+        if getattr(response.user, 'is_anonymous', False):
+            logger.warning(f"Anonymous user {response.user.id} attempted to refresh token - blocked")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Anonymous sessions are no longer supported. Please sign in with email or phone."
             )
 
         # Check if user is new by checking onboarding completion (source of truth)
