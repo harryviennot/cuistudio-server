@@ -7,7 +7,7 @@ from typing import List
 import logging
 
 from app.core.database import get_supabase_client
-from app.core.security import get_current_user
+from app.core.security import get_current_user, get_authenticated_user
 from app.repositories.cookbook_repository import CookbookRepository, CookbookFolderRepository
 from app.api.v1.schemas.cookbook import (
     CookbookCreateRequest,
@@ -28,7 +28,7 @@ router = APIRouter(prefix="/cookbooks", tags=["Cookbooks"])
 @router.post("", response_model=CookbookResponse, status_code=status.HTTP_201_CREATED)
 async def create_cookbook(
     cookbook_data: CookbookCreateRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_authenticated_user),
     supabase: Client = Depends(get_supabase_client)
 ):
     """Create a new cookbook"""
@@ -60,7 +60,7 @@ async def create_cookbook(
 async def list_cookbooks(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_authenticated_user),
     supabase: Client = Depends(get_supabase_client)
 ):
     """List user's cookbooks"""
@@ -81,7 +81,7 @@ async def list_cookbooks(
 @router.get("/{cookbook_id}", response_model=CookbookDetailResponse)
 async def get_cookbook(
     cookbook_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_authenticated_user),
     supabase: Client = Depends(get_supabase_client)
 ):
     """Get cookbook with all details (folders and recipes)"""
@@ -126,7 +126,7 @@ async def get_cookbook(
 async def update_cookbook(
     cookbook_id: str,
     update_data: CookbookUpdateRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_authenticated_user),
     supabase: Client = Depends(get_supabase_client)
 ):
     """Update a cookbook"""
@@ -177,7 +177,7 @@ async def update_cookbook(
 @router.delete("/{cookbook_id}", response_model=MessageResponse)
 async def delete_cookbook(
     cookbook_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_authenticated_user),
     supabase: Client = Depends(get_supabase_client)
 ):
     """Delete a cookbook"""
@@ -216,7 +216,7 @@ async def delete_cookbook(
 async def add_recipe_to_cookbook(
     cookbook_id: str,
     recipe_data: CookbookAddRecipeRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_authenticated_user),
     supabase: Client = Depends(get_supabase_client)
 ):
     """Add a recipe to a cookbook"""
@@ -255,7 +255,7 @@ async def add_recipe_to_cookbook(
 async def remove_recipe_from_cookbook(
     cookbook_id: str,
     recipe_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_authenticated_user),
     supabase: Client = Depends(get_supabase_client)
 ):
     """Remove a recipe from a cookbook"""
@@ -294,7 +294,7 @@ async def remove_recipe_from_cookbook(
 async def create_folder(
     cookbook_id: str,
     folder_data: FolderCreateRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_authenticated_user),
     supabase: Client = Depends(get_supabase_client)
 ):
     """Create a folder in a cookbook"""
@@ -341,7 +341,7 @@ async def create_folder(
 async def update_folder(
     folder_id: str,
     update_data: FolderUpdateRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_authenticated_user),
     supabase: Client = Depends(get_supabase_client)
 ):
     """Update a folder"""
@@ -382,7 +382,7 @@ async def update_folder(
 @router.delete("/folders/{folder_id}", response_model=MessageResponse)
 async def delete_folder(
     folder_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_authenticated_user),
     supabase: Client = Depends(get_supabase_client)
 ):
     """Delete a folder"""

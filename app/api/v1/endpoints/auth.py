@@ -14,6 +14,7 @@ from app.api.v1.schemas.auth import (
     VerifyPhoneOTPRequest,
     CompleteProfileRequest,
     UpdateProfileRequest,
+    SubmitOnboardingRequest,
     RefreshTokenRequest,
     LinkEmailIdentityRequest,
     LinkPhoneIdentityRequest,
@@ -33,110 +34,36 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 @router.post(
     "/anonymous",
     response_model=AuthResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Anonymous Sign-in",
-    description="Sign in anonymously without providing any credentials. Returns persistent user identity.",
+    status_code=status.HTTP_410_GONE,
+    summary="Anonymous Sign-in (Deprecated)",
+    description="Anonymous authentication is no longer supported. Please use email or phone authentication.",
     responses={
-        200: {
-            "description": "Anonymous sign-in successful",
+        410: {
+            "description": "Anonymous authentication is no longer supported",
             "content": {
                 "application/json": {
                     "example": {
-                        "access_token": "eyJ0eXAiOiJKV1QiLCJhbGc...",
-                        "refresh_token": "v1.MR45tLN-Io...",
-                        "token_type": "bearer",
-                        "expires_in": 3600,
-                        "user": {
-                            "id": "uuid-here",
-                            "email": None,
-                            "phone": None,
-                            "created_at": "2024-01-01T00:00:00Z",
-                            "user_metadata": {},
-                            "is_new_user": True,
-                            "is_anonymous": True
-                        }
+                        "detail": "Anonymous authentication is no longer supported. Please sign in with email or phone."
                     }
                 }
             }
         }
     }
 )
-async def sign_in_anonymously(
-    supabase: Client = Depends(get_supabase_client)
-):
+async def sign_in_anonymously():
     """
-    ## Anonymous Sign-in
+    ## Anonymous Sign-in (DEPRECATED)
 
-    Creates a persistent anonymous user identity without requiring any credentials.
+    Anonymous authentication has been disabled. Users must authenticate with email or phone.
 
-    **Key Features:**
-    - No email, phone, or password required
-    - User gets a permanent UUID that persists across sessions
-    - JWT tokens work the same as authenticated users
-    - User can be upgraded to authenticated later via identity linking
-    - Anonymous users can create recipes and cookbooks
-
-    **Use Cases:**
-    - First-time app users who want to try features before signing up
-    - Users who want to create recipes without creating an account
-    - Temporary sessions that can be upgraded later
-
-    **Token Storage:**
-    - Frontend should store access_token and refresh_token securely
-    - Tokens persist the anonymous user's session
-    - When user reopens app, use stored tokens to maintain identity
-
-    **Upgrading to Authenticated:**
-    - Call `/auth/link-identity/email` or `/auth/link-identity/phone`
-    - Same UUID is kept, just adds email/phone identity
-    - All created recipes/cookbooks remain linked to the user
-
-    **Session Persistence:**
-    - As long as tokens are stored on device, user maintains same identity
-    - If app is uninstalled, tokens are lost and user gets new identity on reinstall
-    - Encourage users to link email/phone to prevent data loss
-
-    **RLS Behavior:**
-    - Anonymous users have `auth.uid()` just like authenticated users
-    - They can create/read/update their own data
-    - Subject to same Row Level Security policies
+    **Alternative Authentication Methods:**
+    - Use `/auth/email` to request an OTP code via email
+    - Use `/auth/phone` to request an OTP code via SMS
     """
-    try:
-        # Sign in anonymously via Supabase
-        response = supabase.auth.sign_in_anonymously()
-
-        if not response.user or not response.session:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create anonymous session"
-            )
-
-        # Anonymous users are always "new" on creation
-        user_data = UserResponse(
-            id=response.user.id,
-            email=response.user.email,
-            phone=response.user.phone,
-            created_at=response.user.created_at,
-            user_metadata=response.user.user_metadata or {},
-            is_new_user=True,  # Anonymous users start as "new"
-            is_anonymous=True  # Mark as anonymous
-        )
-
-        return AuthResponse(
-            access_token=response.session.access_token,
-            refresh_token=response.session.refresh_token,
-            token_type="bearer",
-            user=user_data,
-            expires_in=response.session.expires_in or 3600,
-            expires_at=response.session.expires_at
-        )
-
-    except Exception as e:
-        logger.error(f"Anonymous sign-in error: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Anonymous sign-in failed: {str(e)}"
-        )
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="Anonymous authentication is no longer supported. Please sign in with email or phone."
+    )
 
 
 # ============================================================================
@@ -148,13 +75,13 @@ async def sign_in_anonymously(
     response_model=MessageResponse,
     status_code=status.HTTP_200_OK,
     summary="Link Email to Anonymous Account",
-    description="Convert anonymous user to authenticated by linking an email identity. Sends magic link for verification.",
+    description="Convert anonymous user to authenticated by linking an email identity. Sends OTP code for verification.",
     responses={
         200: {
-            "description": "Magic link sent for email verification",
+            "description": "OTP code sent for email verification",
             "content": {
                 "application/json": {
-                    "example": {"message": "Check your email! We've sent you a verification link to complete the upgrade."}
+                    "example": {"message": "Check your email! We've sent you a verification code to complete the upgrade."}
                 }
             }
         },
@@ -178,8 +105,8 @@ async def link_email_identity(
 
     **Flow:**
     1. Anonymous user calls this endpoint with desired email
-    2. System sends magic link to that email
-    3. User clicks link in email
+    2. System sends 6-digit OTP code to that email
+    3. User enters OTP code in app
     4. Call `/auth/email/verify` to complete the linking
     5. Same UUID is kept, `is_anonymous` becomes `false`
     6. All recipes/cookbooks remain linked to the user
@@ -193,7 +120,7 @@ async def link_email_identity(
     **What Changes:**
     - `is_anonymous` becomes `false`
     - Email is added to the account
-    - User can now sign in with email magic link on other devices
+    - User can now sign in with email OTP on other devices
 
     **Important:**
     - This is a one-way operation (cannot revert to anonymous)
@@ -234,7 +161,7 @@ async def link_email_identity(
         })
 
         return MessageResponse(
-            message="Check your email! We've sent you a verification link to complete the upgrade."
+            message="Check your email! We've sent you a verification code to complete the upgrade."
         )
 
     except HTTPException:
@@ -347,59 +274,58 @@ async def link_phone_identity(
 
 
 # ============================================================================
-# EMAIL MAGIC LINK AUTHENTICATION (UNIFIED LOGIN/SIGNUP)
+# EMAIL OTP AUTHENTICATION (UNIFIED LOGIN/SIGNUP)
 # ============================================================================
 
 @router.post(
     "/email",
     response_model=MessageResponse,
     status_code=status.HTTP_200_OK,
-    summary="Request Email Magic Link",
-    description="Send a magic link to the user's email for passwordless authentication. Automatically creates user if they don't exist.",
+    summary="Request Email OTP",
+    description="Send a 6-digit OTP code to the user's email for passwordless authentication. Automatically creates user if they don't exist.",
     responses={
         200: {
-            "description": "Magic link sent successfully",
+            "description": "OTP code sent successfully",
             "content": {
                 "application/json": {
-                    "example": {"message": "Check your email! We've sent you a magic link to sign in."}
+                    "example": {"message": "Check your email! We've sent you a verification code."}
                 }
             }
         }
     }
 )
-async def authenticate_with_email(
+async def send_email_otp(
     request: EmailAuthRequest,
     supabase: Client = Depends(get_supabase_client)
 ):
     """
-    ## Email Magic Link Authentication (Unified Login/Signup)
+    ## Email OTP Authentication (Unified Login/Signup)
 
-    Sends a one-time use magic link to the provided email address.
+    Sends a 6-digit one-time password to the provided email address.
 
     **Key Features:**
     - Unified endpoint for both login and signup
     - Automatically creates user if they don't exist
     - No password required
-    - Magic link expires in 1 hour
+    - OTP expires in 3 minutes
     - Rate limited to prevent abuse
 
     **Flow:**
     1. User submits their email
-    2. System sends magic link to email
-    3. User clicks link in email
-    4. User is redirected to your app with token
-    5. Call `/auth/email/verify` to complete authentication
+    2. System sends 6-digit OTP code to email
+    3. User enters OTP code in app
+    4. Call `/auth/email/verify` with the OTP code to complete authentication
 
     **Security:**
     - Returns generic success message to prevent email enumeration
-    - One-time use tokens
-    - PKCE flow supported
+    - One-time use codes
+    - Time-limited validity (3 minutes)
     """
     try:
         from app.core.config import get_settings
         settings = get_settings()
 
-        # sign_in_with_otp creates user if doesn't exist, sends magic link for both cases
+        # sign_in_with_otp creates user if doesn't exist, sends OTP for both cases
         response = supabase.auth.sign_in_with_otp({
             "email": request.email,
             "options": {
@@ -408,17 +334,20 @@ async def authenticate_with_email(
             }
         })
 
+        logger.info(f"OTP email sent successfully to {request.email}")
+
         return MessageResponse(
-            message="Check your email! We've sent you a magic link to sign in."
+            message="Check your email! We've sent you a verification code."
         )
 
     except Exception as e:
         error_message = str(e)
-        logger.error(f"Email authentication error: {error_message}")
+        logger.error(f"Email OTP send error for {request.email}: {error_message}")
+        logger.exception(e)  # Log full stack trace
 
         # Return generic message to prevent email enumeration
         return MessageResponse(
-            message="Check your email! We've sent you a magic link to sign in."
+            message="Check your email! We've sent you a verification code."
         )
 
 
@@ -426,8 +355,8 @@ async def authenticate_with_email(
     "/email/verify",
     response_model=AuthResponse,
     status_code=status.HTTP_200_OK,
-    summary="Verify Email Magic Link",
-    description="Verify the magic link token from email and complete authentication",
+    summary="Verify Email OTP",
+    description="Verify the 6-digit OTP code from email and complete authentication",
     responses={
         200: {
             "description": "Authentication successful",
@@ -450,53 +379,60 @@ async def authenticate_with_email(
                 }
             }
         },
-        400: {"description": "Invalid or expired magic link"}
+        400: {"description": "Invalid or expired OTP code"}
     }
 )
-async def verify_email_magic_link(
+async def verify_email_otp(
     request: VerifyEmailOTPRequest,
-    supabase: Client = Depends(get_supabase_client)
+    supabase: Client = Depends(get_supabase_client),
+    admin_client: Client = Depends(get_supabase_admin_client)
 ):
     """
-    ## Verify Email Magic Link
+    ## Verify Email OTP
 
-    Validates the magic link token and returns authentication tokens.
+    Validates the 6-digit OTP code and returns authentication tokens.
 
     **Request Body:**
-    - `token_hash`: The token from the magic link URL
+    - `email`: The email address that received the OTP
+    - `token`: The 6-digit OTP code from email
     - `type`: Must be "email"
 
     **Response:**
     - Returns JWT access token and refresh token
     - Includes user information with `is_new_user` flag
-    - If `is_new_user` is true, frontend should redirect to profile completion
+    - If `is_new_user` is true, frontend should redirect to onboarding
 
     **Next Steps:**
-    - If `is_new_user === true`: Call `/auth/profile/complete`
+    - If `is_new_user === true`: Call `/auth/onboarding`
     - If `is_new_user === false`: User is fully authenticated, proceed to app
     """
     try:
         response = supabase.auth.verify_otp({
-            "token_hash": request.token_hash,
+            "email": request.email,
+            "token": request.token,
             "type": request.type
         })
 
         if not response.user or not response.session:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid or expired magic link"
+                detail="Invalid or expired OTP code"
             )
 
-        # Check if user is new by querying database (source of truth)
+        # Check if user is new by checking onboarding completion (source of truth)
         is_new_user = True
         try:
-            profile_result = supabase.from_("users").select("id").eq("id", response.user.id).execute()
-            is_new_user = len(profile_result.data) == 0
+            user_result = admin_client.from_("users").select("onboarding_completed").eq("id", response.user.id).execute()
+            if user_result.data:
+                # User exists in database, check onboarding status
+                is_new_user = not user_result.data[0].get("onboarding_completed", False)
+            else:
+                # User doesn't exist in users table yet, definitely new
+                is_new_user = True
         except Exception as e:
-            logger.warning(f"Failed to check profile status: {e}")
-            # Fallback to metadata if database check fails
-            user_metadata = response.user.user_metadata or {}
-            is_new_user = not user_metadata.get("profile_completed", False)
+            logger.warning(f"Failed to check onboarding status: {e}")
+            # Default to new user if check fails
+            is_new_user = True
 
         user_data = UserResponse(
             id=response.user.id,
@@ -520,10 +456,10 @@ async def verify_email_magic_link(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Email verification error: {str(e)}")
+        logger.error(f"Email OTP verification error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Magic link verification failed. The link may be invalid or expired."
+            detail="OTP verification failed. The code may be invalid or expired."
         )
 
 
@@ -634,7 +570,8 @@ async def authenticate_with_phone(
 )
 async def verify_phone_otp(
     request: VerifyPhoneOTPRequest,
-    supabase: Client = Depends(get_supabase_client)
+    supabase: Client = Depends(get_supabase_client),
+    admin_client: Client = Depends(get_supabase_admin_client)
 ):
     """
     ## Verify Phone OTP
@@ -650,7 +587,7 @@ async def verify_phone_otp(
     - Includes user information with `is_new_user` flag
 
     **Next Steps:**
-    - If `is_new_user === true`: Call `/auth/profile/complete`
+    - If `is_new_user === true`: Call `/auth/onboarding`
     - If `is_new_user === false`: User is fully authenticated, proceed to app
     """
     try:
@@ -666,16 +603,20 @@ async def verify_phone_otp(
                 detail="Invalid OTP code"
             )
 
-        # Check if user is new by querying database (source of truth)
+        # Check if user is new by checking onboarding completion (source of truth)
         is_new_user = True
         try:
-            profile_result = supabase.from_("users").select("id").eq("id", response.user.id).execute()
-            is_new_user = len(profile_result.data) == 0
+            user_result = admin_client.from_("users").select("onboarding_completed").eq("id", response.user.id).execute()
+            if user_result.data:
+                # User exists in database, check onboarding status
+                is_new_user = not user_result.data[0].get("onboarding_completed", False)
+            else:
+                # User doesn't exist in users table yet, definitely new
+                is_new_user = True
         except Exception as e:
-            logger.warning(f"Failed to check profile status: {e}")
-            # Fallback to metadata if database check fails
-            user_metadata = response.user.user_metadata or {}
-            is_new_user = not user_metadata.get("profile_completed", False)
+            logger.warning(f"Failed to check onboarding status: {e}")
+            # Default to new user if check fails
+            is_new_user = True
 
         user_data = UserResponse(
             id=response.user.id,
@@ -919,6 +860,134 @@ async def update_profile(
 
 
 # ============================================================================
+# ONBOARDING QUESTIONNAIRE
+# ============================================================================
+
+@router.post(
+    "/onboarding",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Submit Onboarding Questionnaire",
+    description="Submit required onboarding questionnaire for new users. Tracks marketing and user preference data.",
+    responses={
+        200: {
+            "description": "Onboarding completed successfully",
+            "content": {
+                "application/json": {
+                    "example": {"message": "Onboarding completed successfully!"}
+                }
+            }
+        },
+        400: {"description": "Validation error or onboarding already completed"},
+        401: {"description": "Not authenticated"}
+    }
+)
+async def submit_onboarding(
+    request: SubmitOnboardingRequest,
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client),
+    admin_client: Client = Depends(get_supabase_admin_client)
+):
+    """
+    ## Submit Onboarding Questionnaire
+
+    Captures required onboarding data for new users including marketing attribution
+    and user preferences. Must be completed before accessing the main app.
+
+    **Required Fields:**
+    - `heard_from`: How user discovered the app (social_media, friend, app_store, blog, search_engine, other)
+    - `cooking_frequency`: How often user cooks (rarely, occasionally, regularly, almost_daily)
+    - `recipe_sources`: Where user gets recipes (array: tiktok, instagram, youtube, blogs, cookbooks, family, other)
+
+    **Optional Fields:**
+    - `display_name`: User's preferred display name
+    - `age`: User's age (13-120)
+
+    **Data Usage:**
+    - Marketing attribution tracking
+    - User personalization
+    - Feature usage analytics
+
+    **Authentication:**
+    - Requires valid JWT access token in Authorization header
+    - Format: `Authorization: Bearer <access_token>`
+
+    **After Completion:**
+    - User's `onboarding_completed` flag is set to `true`
+    - User can now access the full application
+    - `/auth/me` will return `is_new_user: false`
+    """
+    try:
+        user_id = current_user["id"]
+
+        # Check if onboarding already completed
+        existing = admin_client.from_("user_onboarding").select("id").eq("user_id", user_id).execute()
+        if existing.data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Onboarding already completed"
+            )
+
+        # Insert onboarding data
+        onboarding_record = {
+            "user_id": user_id,
+            "heard_from": request.heard_from,
+            "cooking_frequency": request.cooking_frequency,
+            "recipe_sources": request.recipe_sources,
+            "display_name": request.display_name,
+            "age": request.age
+        }
+
+        onboarding_result = admin_client.from_("user_onboarding").insert(onboarding_record).execute()
+
+        if not onboarding_result.data:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to save onboarding data"
+            )
+
+        # Mark onboarding as completed in users table
+        user_update = {
+            "onboarding_completed": True,
+            "updated_at": "now()"
+        }
+
+        user_result = admin_client.from_("users").update(user_update).eq("id", user_id).execute()
+
+        if not user_result.data:
+            # If users table record doesn't exist, create it
+            # Use display_name as name if provided, otherwise use email username
+            default_name = request.display_name or current_user.get("email", "").split("@")[0] or "User"
+
+            user_insert = {
+                "id": user_id,
+                "name": default_name,
+                "onboarding_completed": True
+            }
+            user_result = admin_client.from_("users").insert(user_insert).execute()
+
+            if not user_result.data:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to update user onboarding status"
+                )
+
+        logger.info(f"Onboarding completed for user {user_id}")
+
+        return MessageResponse(message="Onboarding completed successfully!")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_message = str(e)
+        logger.error(f"Onboarding submission error: {error_message}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to complete onboarding: {error_message}"
+        )
+
+
+# ============================================================================
 # SESSION MANAGEMENT
 # ============================================================================
 
@@ -1051,12 +1120,14 @@ async def get_me(current_user: dict = Depends(get_current_user)):
                 }
             }
         },
-        401: {"description": "Invalid or expired refresh token"}
+        401: {"description": "Invalid or expired refresh token"},
+        403: {"description": "Anonymous users cannot refresh tokens"}
     }
 )
 async def refresh_token(
     request: RefreshTokenRequest,
-    supabase: Client = Depends(get_supabase_client)
+    supabase: Client = Depends(get_supabase_client),
+    admin_client: Client = Depends(get_supabase_admin_client)
 ):
     """
     ## Refresh Access Token
@@ -1079,6 +1150,9 @@ async def refresh_token(
     - Store refresh token securely (encrypted storage)
     - Implement automatic token refresh on 401 errors
     - Never expose refresh tokens in URLs or logs
+
+    **Note:**
+    - Anonymous users cannot refresh tokens. They must authenticate with email or phone.
     """
     try:
         response = supabase.auth.refresh_session(request.refresh_token)
@@ -1089,16 +1163,28 @@ async def refresh_token(
                 detail="Invalid refresh token"
             )
 
-        # Check if user is new by querying database (source of truth)
+        # Block anonymous users from refreshing tokens
+        if getattr(response.user, 'is_anonymous', False):
+            logger.warning(f"Anonymous user {response.user.id} attempted to refresh token - blocked")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Anonymous sessions are no longer supported. Please sign in with email or phone."
+            )
+
+        # Check if user is new by checking onboarding completion (source of truth)
         is_new_user = True
         try:
-            profile_result = supabase.from_("users").select("id").eq("id", response.user.id).execute()
-            is_new_user = len(profile_result.data) == 0
+            user_result = admin_client.from_("users").select("onboarding_completed").eq("id", response.user.id).execute()
+            if user_result.data:
+                # User exists in database, check onboarding status
+                is_new_user = not user_result.data[0].get("onboarding_completed", False)
+            else:
+                # User doesn't exist in users table yet, definitely new
+                is_new_user = True
         except Exception as e:
-            logger.warning(f"Failed to check profile status: {e}")
-            # Fallback to metadata if database check fails
-            user_metadata = response.user.user_metadata or {}
-            is_new_user = not user_metadata.get("profile_completed", False)
+            logger.warning(f"Failed to check onboarding status: {e}")
+            # Default to new user if check fails
+            is_new_user = True
 
         user_data = UserResponse(
             id=response.user.id,
