@@ -21,6 +21,7 @@ from app.api.v1.schemas.collection import (
     CollectionRecipeResponse,
     CollectionCountsResponse,
 )
+from app.domain.models import RecipeTimings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/collections", tags=["Collections"])
@@ -136,6 +137,15 @@ async def get_collection_by_slug(
         for record in records:
             recipe = record.get("recipes", {})
             if recipe:
+                # Build timings if available
+                timings = None
+                if recipe.get("prep_time_minutes") or recipe.get("cook_time_minutes"):
+                    timings = RecipeTimings(
+                        prep_time_minutes=recipe.get("prep_time_minutes"),
+                        cook_time_minutes=recipe.get("cook_time_minutes"),
+                        total_time_minutes=recipe.get("total_time_minutes")
+                    )
+
                 recipe_responses.append(
                     CollectionRecipeResponse(
                         id=recipe["id"],
@@ -148,7 +158,8 @@ async def get_collection_by_slug(
                         source_type=recipe["source_type"],
                         is_public=recipe["is_public"],
                         added_at=record.get("created_at", recipe["created_at"]),
-                        created_at=recipe["created_at"]
+                        created_at=recipe["created_at"],
+                        timings=timings
                     )
                 )
 

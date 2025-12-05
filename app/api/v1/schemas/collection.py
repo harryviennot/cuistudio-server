@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
+from app.domain.models import RecipeTimings
+
 
 # ============= Request Schemas =============
 
@@ -61,6 +63,7 @@ class CollectionRecipeResponse(BaseModel):
     is_public: bool
     added_at: datetime
     created_at: datetime
+    timings: Optional[RecipeTimings] = None
 
 
 class CollectionWithRecipesResponse(BaseModel):
