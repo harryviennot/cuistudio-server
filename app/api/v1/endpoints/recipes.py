@@ -28,6 +28,8 @@ from app.api.v1.schemas.recipe import (
     TrendingRecipeResponse,
     UserCookingHistoryItemResponse,
     MarkRecipeAseCookedRequest,
+    UpdateCookingEventRequest,
+    CookingEventResponse,
 )
 from app.api.v1.schemas.collection import (
     SaveRecipeRequest,
@@ -804,6 +806,149 @@ async def mark_recipe_cooked(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to mark recipe as cooked: {str(e)}"
+        )
+
+
+@router.patch("/cooking-events/{event_id}", response_model=CookingEventResponse)
+async def update_cooking_event(
+    event_id: str,
+    request: UpdateCookingEventRequest,
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """
+    Update a cooking event.
+
+    Only the owner can update their own events.
+    Can update:
+    - cooked_at: When the cooking happened
+    - rating: Rating given for this session (0.5-5.0)
+    - image_url: Photo from cooking (set to null to remove)
+    """
+    from app.services.upload_service import UploadService
+
+    try:
+        repo = UserRecipeRepository(supabase)
+        upload_service = UploadService(supabase)
+
+        # Check if we need to remove the existing image
+        remove_image = False
+        old_image_url = None
+
+        if request.image_url is None:
+            # Check if this is an explicit null (remove image) vs not provided
+            # We need to check the raw request to distinguish
+            existing = await repo.get_cooking_event(event_id, current_user["id"])
+            if existing and existing.get("image_url"):
+                # User wants to remove the image
+                remove_image = True
+                old_image_url = existing["image_url"]
+
+        # Update the event
+        updated = await repo.update_cooking_event(
+            event_id=event_id,
+            user_id=current_user["id"],
+            cooked_at=request.cooked_at,
+            rating=request.rating,
+            image_url=request.image_url if request.image_url else None,
+            remove_image=remove_image
+        )
+
+        if not updated:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Cooking event not found or you don't have permission to edit it"
+            )
+
+        # If we removed the image, delete it from storage
+        if remove_image and old_image_url:
+            path = UploadService.extract_storage_path(old_image_url, "cooking-events")
+            if path:
+                try:
+                    await upload_service.delete_image(path, bucket="cooking-events")
+                except Exception as e:
+                    logger.warning(f"Failed to delete old cooking image: {str(e)}")
+
+        # Generate signed URL for cooking photo if present
+        cooking_image_url = None
+        if updated.get("image_url"):
+            path = UploadService.extract_storage_path(updated["image_url"], "cooking-events")
+            if path:
+                cooking_image_url = upload_service.create_signed_url(
+                    bucket="cooking-events",
+                    path=path,
+                    expires_in=3600
+                )
+
+        return CookingEventResponse(
+            event_id=updated["id"],
+            recipe_id=updated["recipe_id"],
+            cooked_at=updated["cooked_at"],
+            rating=updated.get("rating"),
+            cooking_image_url=cooking_image_url,
+            duration_minutes=updated.get("duration_minutes")
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating cooking event: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update cooking event: {str(e)}"
+        )
+
+
+@router.delete("/cooking-events/{event_id}", response_model=MessageResponse)
+async def delete_cooking_event(
+    event_id: str,
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """
+    Delete a cooking event.
+
+    Only the owner can delete their own events.
+    Also:
+    - Decrements times_cooked in user_recipe_data
+    - Deletes associated image from storage if exists
+    """
+    from app.services.upload_service import UploadService
+
+    try:
+        repo = UserRecipeRepository(supabase)
+        upload_service = UploadService(supabase)
+
+        # Delete the event (returns the deleted event data)
+        deleted = await repo.delete_cooking_event(
+            event_id=event_id,
+            user_id=current_user["id"]
+        )
+
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Cooking event not found or you don't have permission to delete it"
+            )
+
+        # If there was an image, delete it from storage
+        if deleted.get("image_url"):
+            path = UploadService.extract_storage_path(deleted["image_url"], "cooking-events")
+            if path:
+                try:
+                    await upload_service.delete_image(path, bucket="cooking-events")
+                except Exception as e:
+                    logger.warning(f"Failed to delete cooking image: {str(e)}")
+
+        return MessageResponse(message="Cooking event deleted successfully")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting cooking event: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete cooking event: {str(e)}"
         )
 
 

@@ -244,3 +244,20 @@ class MarkRecipeAseCookedRequest(BaseModel):
     rating: Optional[float] = Field(None, ge=0.5, le=5.0)
     image_url: Optional[str] = None  # URL of uploaded cooking photo
     duration_minutes: Optional[int] = Field(None, ge=0)
+
+
+class UpdateCookingEventRequest(BaseModel):
+    """Request to update an existing cooking event"""
+    cooked_at: Optional[datetime] = None
+    rating: Optional[float] = Field(None, ge=0.5, le=5.0)
+    image_url: Optional[str] = None  # Set to explicit null to remove image
+
+
+class CookingEventResponse(BaseModel):
+    """Response for a single cooking event after update"""
+    event_id: str
+    recipe_id: str
+    cooked_at: datetime
+    rating: Optional[float] = None
+    cooking_image_url: Optional[str] = None
+    duration_minutes: Optional[int] = None

@@ -312,3 +312,132 @@ class UserRecipeRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Error setting favorite status: {str(e)}")
             raise
+
+    # =============================================
+    # Cooking Event CRUD methods
+    # =============================================
+
+    async def get_cooking_event(
+        self,
+        event_id: str,
+        user_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get a specific cooking event by ID.
+        Verifies ownership by checking user_id.
+
+        Returns:
+            The cooking event if found and owned by user, None otherwise
+        """
+        try:
+            response = self.supabase.table("recipe_cooking_events")\
+                .select("*")\
+                .eq("id", event_id)\
+                .eq("user_id", user_id)\
+                .execute()
+
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error fetching cooking event: {str(e)}")
+            raise
+
+    async def update_cooking_event(
+        self,
+        event_id: str,
+        user_id: str,
+        cooked_at: Optional[datetime] = None,
+        rating: Optional[float] = None,
+        image_url: Optional[str] = None,
+        remove_image: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Update a cooking event.
+        Only the owner can update their own events.
+
+        Args:
+            event_id: The cooking event ID
+            user_id: The user ID (for ownership verification)
+            cooked_at: New timestamp for when cooking happened
+            rating: New rating (0.5-5.0)
+            image_url: New image URL (or None to keep existing)
+            remove_image: If True, remove the existing image
+
+        Returns:
+            Updated cooking event, or None if not found/not owned
+        """
+        try:
+            # First verify ownership
+            existing = await self.get_cooking_event(event_id, user_id)
+            if not existing:
+                return None
+
+            # Build update data
+            update_data = {}
+            if cooked_at is not None:
+                update_data["cooked_at"] = cooked_at.isoformat()
+            if rating is not None:
+                update_data["rating"] = rating
+            if remove_image:
+                update_data["image_url"] = None
+            elif image_url is not None:
+                update_data["image_url"] = image_url
+
+            if not update_data:
+                # No changes to make
+                return existing
+
+            response = self.supabase.table("recipe_cooking_events")\
+                .update(update_data)\
+                .eq("id", event_id)\
+                .eq("user_id", user_id)\
+                .execute()
+
+            return response.data[0] if response.data else None
+        except Exception as e:
+            logger.error(f"Error updating cooking event: {str(e)}")
+            raise
+
+    async def delete_cooking_event(
+        self,
+        event_id: str,
+        user_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Delete a cooking event and decrement times_cooked.
+
+        Args:
+            event_id: The cooking event ID
+            user_id: The user ID (for ownership verification)
+
+        Returns:
+            The deleted event data (including image_url for cleanup), or None if not found
+        """
+        try:
+            # First get the event to verify ownership and get recipe_id
+            existing = await self.get_cooking_event(event_id, user_id)
+            if not existing:
+                return None
+
+            recipe_id = existing["recipe_id"]
+
+            # Delete the event
+            self.supabase.table("recipe_cooking_events")\
+                .delete()\
+                .eq("id", event_id)\
+                .eq("user_id", user_id)\
+                .execute()
+
+            # Decrement times_cooked in user_recipe_data
+            user_data = await self.get_by_user_and_recipe(user_id, recipe_id)
+            if user_data and user_data.get("times_cooked", 0) > 0:
+                new_count = user_data["times_cooked"] - 1
+                await self.upsert_user_data(
+                    user_id,
+                    recipe_id,
+                    {"times_cooked": new_count}
+                )
+
+            return existing
+        except Exception as e:
+            logger.error(f"Error deleting cooking event: {str(e)}")
+            raise
