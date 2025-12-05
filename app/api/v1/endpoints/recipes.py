@@ -335,19 +335,49 @@ async def get_cooking_history(
     - recipe_image_url: The recipe's main image
     - difficulty: Recipe difficulty level
     - rating: The rating given at this specific cooking session (may differ from current rating)
-    - cooking_image_url: Photo taken during this cooking session
+    - cooking_image_url: Photo taken during this cooking session (signed URL, expires in 1 hour)
     - duration_minutes: Actual cooking time for this session
     - cooked_at: When this cooking session occurred
     - times_cooked: Total times the user has cooked this recipe
+
+    Note: cooking_image_url is a signed URL that expires after 1 hour for privacy.
+    The mobile app should refresh the cooking history if images fail to load after extended viewing.
     """
+    from app.services.upload_service import UploadService
+
     try:
         repo = RecipeRepository(supabase)
+        upload_service = UploadService(supabase)
+
         cooking_history = await repo.get_user_cooking_history(
             user_id=current_user["id"],
             time_window_days=time_window_days,
             limit=limit,
             offset=offset
         )
+
+        # Generate signed URLs for cooking photos (private bucket)
+        for event in cooking_history:
+            if event.get("cooking_image_url"):
+                stored_url = event["cooking_image_url"]
+                # Extract path from stored URL
+                path = UploadService.extract_storage_path(stored_url, "cooking-events")
+
+                if path:
+                    # Generate fresh signed URL
+                    signed_url = upload_service.create_signed_url(
+                        bucket="cooking-events",
+                        path=path,
+                        expires_in=3600  # 1 hour
+                    )
+                    if signed_url:
+                        event["cooking_image_url"] = signed_url
+                    else:
+                        # If signed URL generation fails, clear the URL
+                        # rather than returning an inaccessible public URL
+                        logger.warning(f"Failed to generate signed URL for cooking photo: {path}")
+                        event["cooking_image_url"] = None
+
         return cooking_history
     except Exception as e:
         logger.error(f"Error fetching cooking history: {str(e)}")

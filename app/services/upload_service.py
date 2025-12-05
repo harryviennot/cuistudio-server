@@ -2,7 +2,8 @@
 Image upload service for Supabase Storage
 """
 import uuid
-from typing import List, Dict
+import re
+from typing import List, Dict, Optional
 from fastapi import UploadFile, HTTPException, status
 from supabase import Client
 import logging
@@ -18,7 +19,11 @@ from app.api.v1.schemas.upload import (
 
 logger = logging.getLogger(__name__)
 
-STORAGE_BUCKET = "recipe-images"
+DEFAULT_STORAGE_BUCKET = "recipe-images"
+ALLOWED_BUCKETS = ["recipe-images", "cooking-events"]
+# Private buckets require signed URLs for access
+PRIVATE_BUCKETS = ["cooking-events"]
+SIGNED_URL_EXPIRY_SECONDS = 3600  # 1 hour
 MAX_FILE_SIZE_BYTES = MAX_IMAGE_SIZE_MB * 1024 * 1024  # Convert MB to bytes
 
 # Formats that need conversion to JPEG for OpenAI compatibility
@@ -34,7 +39,8 @@ class UploadService:
     async def upload_image(
         self,
         file: UploadFile,
-        user_id: str
+        user_id: str,
+        bucket: str = DEFAULT_STORAGE_BUCKET
     ) -> Dict[str, any]:
         """
         Upload a single image to Supabase Storage
@@ -43,6 +49,7 @@ class UploadService:
         Args:
             file: The uploaded file
             user_id: ID of the user uploading the image
+            bucket: Target storage bucket (default: recipe-images)
 
         Returns:
             Dict with url, path, size, and content_type
@@ -79,7 +86,7 @@ class UploadService:
             final_size = len(file_content)
 
             # Upload to Supabase Storage
-            response = self.supabase.storage.from_(STORAGE_BUCKET).upload(
+            response = self.supabase.storage.from_(bucket).upload(
                 path=storage_path,
                 file=file_content,
                 file_options={
@@ -88,8 +95,18 @@ class UploadService:
                 }
             )
 
-            # Get public URL
-            public_url = self.supabase.storage.from_(STORAGE_BUCKET).get_public_url(storage_path)
+            # Generate URL based on bucket privacy
+            if bucket in PRIVATE_BUCKETS:
+                # Generate signed URL for private buckets
+                signed_url_response = self.supabase.storage.from_(bucket).create_signed_url(
+                    storage_path,
+                    SIGNED_URL_EXPIRY_SECONDS
+                )
+                url = signed_url_response.get("signedURL")
+                logger.info(f"Generated signed URL for private bucket: {bucket}")
+            else:
+                # Use public URL for public buckets
+                url = self.supabase.storage.from_(bucket).get_public_url(storage_path)
 
             if file.content_type in FORMATS_TO_CONVERT:
                 logger.info(f"Successfully uploaded converted image: {storage_path} ({original_size} → {final_size} bytes, {int((1 - final_size/original_size) * 100)}% reduction)")
@@ -97,7 +114,7 @@ class UploadService:
                 logger.info(f"Successfully uploaded image: {storage_path}")
 
             return {
-                "url": public_url,
+                "url": url,
                 "path": storage_path,
                 "size": final_size,
                 "content_type": content_type,
@@ -118,7 +135,8 @@ class UploadService:
     async def upload_images(
         self,
         files: List[UploadFile],
-        user_id: str
+        user_id: str,
+        bucket: str = DEFAULT_STORAGE_BUCKET
     ) -> List[Dict[str, any]]:
         """
         Upload multiple images to Supabase Storage
@@ -126,6 +144,7 @@ class UploadService:
         Args:
             files: List of uploaded files
             user_id: ID of the user uploading the images
+            bucket: Target storage bucket (default: recipe-images)
 
         Returns:
             List of dicts with upload results
@@ -154,7 +173,7 @@ class UploadService:
         uploaded_images = []
         for file in files:
             try:
-                result = await self.upload_image(file, user_id)
+                result = await self.upload_image(file, user_id, bucket)
                 uploaded_images.append(result)
             except Exception as e:
                 # If any upload fails, log but continue (or implement rollback)
@@ -214,12 +233,17 @@ class UploadService:
         extension = filename.rsplit(".", 1)[1].lower()
         return extension
 
-    async def delete_image(self, storage_path: str) -> bool:
+    async def delete_image(
+        self,
+        storage_path: str,
+        bucket: str = DEFAULT_STORAGE_BUCKET
+    ) -> bool:
         """
         Delete an image from Supabase Storage
 
         Args:
             storage_path: The storage path of the image to delete
+            bucket: Target storage bucket (default: recipe-images)
 
         Returns:
             True if deletion was successful
@@ -228,7 +252,7 @@ class UploadService:
             HTTPException: If deletion fails
         """
         try:
-            self.supabase.storage.from_(STORAGE_BUCKET).remove([storage_path])
+            self.supabase.storage.from_(bucket).remove([storage_path])
             logger.info(f"Successfully deleted image: {storage_path}")
             return True
         except Exception as e:
@@ -238,12 +262,17 @@ class UploadService:
                 detail=f"Failed to delete image: {str(e)}"
             )
 
-    async def delete_images(self, storage_paths: List[str]) -> bool:
+    async def delete_images(
+        self,
+        storage_paths: List[str],
+        bucket: str = DEFAULT_STORAGE_BUCKET
+    ) -> bool:
         """
         Delete multiple images from Supabase Storage
 
         Args:
             storage_paths: List of storage paths to delete
+            bucket: Target storage bucket (default: recipe-images)
 
         Returns:
             True if all deletions were successful
@@ -252,7 +281,7 @@ class UploadService:
             HTTPException: If deletion fails
         """
         try:
-            self.supabase.storage.from_(STORAGE_BUCKET).remove(storage_paths)
+            self.supabase.storage.from_(bucket).remove(storage_paths)
             logger.info(f"Successfully deleted {len(storage_paths)} images")
             return True
         except Exception as e:
@@ -311,3 +340,63 @@ class UploadService:
             logger.error(f"Failed to convert image to JPEG: {str(e)}")
             # Return original if conversion fails
             return image_data, original_mime
+
+    def create_signed_url(
+        self,
+        bucket: str,
+        path: str,
+        expires_in: int = SIGNED_URL_EXPIRY_SECONDS
+    ) -> Optional[str]:
+        """
+        Generate a signed URL for a private file.
+
+        Args:
+            bucket: Storage bucket name
+            path: File path within the bucket
+            expires_in: URL expiry time in seconds (default 1 hour)
+
+        Returns:
+            Signed URL string, or None if generation fails
+        """
+        try:
+            response = self.supabase.storage.from_(bucket).create_signed_url(
+                path,
+                expires_in
+            )
+            return response.get("signedURL")
+        except Exception as e:
+            logger.error(f"Failed to create signed URL for {bucket}/{path}: {str(e)}")
+            return None
+
+    @staticmethod
+    def extract_storage_path(url: str, bucket: str) -> Optional[str]:
+        """
+        Extract storage path from a Supabase storage URL.
+
+        Handles both public URLs and signed URLs.
+        Pattern: .../storage/v1/object/public/{bucket}/{path}
+        Or: .../storage/v1/object/sign/{bucket}/{path}?token=...
+
+        Args:
+            url: The storage URL (public or signed)
+            bucket: The bucket name to extract path from
+
+        Returns:
+            The storage path, or None if extraction fails
+        """
+        if not url:
+            return None
+
+        # If URL is already just a path (not a full URL), return it
+        if not url.startswith("http"):
+            return url
+
+        # Try to extract path after bucket name
+        # Handles both /public/{bucket}/ and /sign/{bucket}/ patterns
+        pattern = rf"/(?:public|sign)/{re.escape(bucket)}/(.+?)(?:\?|$)"
+        match = re.search(pattern, url)
+
+        if match:
+            return match.group(1)
+
+        return None
