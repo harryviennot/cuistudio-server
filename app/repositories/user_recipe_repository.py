@@ -169,3 +169,117 @@ class UserRecipeRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Error fetching previous rating: {str(e)}")
             raise
+
+    # =============================================
+    # Collection-related methods (virtual collections)
+    # =============================================
+
+    async def get_user_extracted_recipes(
+        self,
+        user_id: str,
+        limit: int = 20,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        Get recipes that the user has extracted.
+
+        Returns user_recipe_data records with full recipe details
+        where was_extracted = true.
+        """
+        try:
+            response = self.supabase.table(self.table_name)\
+                .select("""
+                    *,
+                    recipes!inner(
+                        id, title, description, image_url,
+                        servings, difficulty, tags,
+                        source_type, is_public, created_at
+                    )
+                """)\
+                .eq("user_id", user_id)\
+                .eq("was_extracted", True)\
+                .order("created_at", desc=True)\
+                .limit(limit)\
+                .offset(offset)\
+                .execute()
+
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Error fetching user extracted recipes: {str(e)}")
+            raise
+
+    async def count_user_extracted_recipes(self, user_id: str) -> int:
+        """Count recipes that the user has extracted."""
+        try:
+            response = self.supabase.table(self.table_name)\
+                .select("id", count="exact")\
+                .eq("user_id", user_id)\
+                .eq("was_extracted", True)\
+                .execute()
+
+            return response.count or 0
+        except Exception as e:
+            logger.error(f"Error counting user extracted recipes: {str(e)}")
+            raise
+
+    async def count_user_favorites(self, user_id: str) -> int:
+        """Count recipes that the user has favorited."""
+        try:
+            response = self.supabase.table(self.table_name)\
+                .select("id", count="exact")\
+                .eq("user_id", user_id)\
+                .eq("is_favorite", True)\
+                .execute()
+
+            return response.count or 0
+        except Exception as e:
+            logger.error(f"Error counting user favorites: {str(e)}")
+            raise
+
+    async def mark_as_extracted(
+        self,
+        user_id: str,
+        recipe_id: str
+    ) -> Dict[str, Any]:
+        """
+        Mark a recipe as extracted by this user.
+
+        This is used when:
+        1. User extracts a new recipe
+        2. User extracts a duplicate (recipe already exists)
+
+        Uses upsert to handle both new and existing records.
+        """
+        try:
+            return await self.upsert_user_data(
+                user_id,
+                recipe_id,
+                {"was_extracted": True}
+            )
+        except Exception as e:
+            logger.error(f"Error marking recipe as extracted: {str(e)}")
+            raise
+
+    async def set_favorite(
+        self,
+        user_id: str,
+        recipe_id: str,
+        is_favorite: bool
+    ) -> Dict[str, Any]:
+        """
+        Set the favorite status for a recipe.
+
+        Args:
+            user_id: User ID
+            recipe_id: Recipe ID
+            is_favorite: True to favorite, False to unfavorite
+        """
+        try:
+            return await self.upsert_user_data(
+                user_id,
+                recipe_id,
+                {"is_favorite": is_favorite}
+            )
+        except Exception as e:
+            logger.error(f"Error setting favorite status: {str(e)}")
+            raise

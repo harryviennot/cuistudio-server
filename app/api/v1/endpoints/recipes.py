@@ -96,55 +96,37 @@ async def save_recipe(
     supabase: Client = Depends(get_supabase_admin_client)
 ):
     """
-    Save a recipe to a collection.
+    Save/publish a recipe.
 
     This endpoint is used after the user previews a recipe (from extraction)
     and decides to save it. It handles:
     - Publishing draft recipes (setting is_draft=false)
-    - Adding recipes to user's collection
-    - Handling existing public recipes (add to collection)
+    - Marking recipe as extracted in user_recipe_data
 
     Flow:
     1. Submit extraction via POST /extraction/submit
     2. Poll job status via GET /extraction/jobs/{job_id} until completed
     3. Preview the draft recipe using GET /recipes/{recipe_id}
-    4. Call this endpoint with recipe_id and collection_id to save
+    4. Call this endpoint with recipe_id to publish and save
 
-    If no collection_id is provided, uses the user's default "extracted" collection.
+    Note: collection_id parameter is deprecated and ignored.
+    Recipes are automatically added to the "extracted" virtual collection.
     """
     from app.services.recipe_save_service import RecipeSaveService
-    from app.repositories.collection_repository import CollectionRepository
 
     try:
         save_service = RecipeSaveService(supabase)
 
-        # If no collection_id provided, use the user's "extracted" collection
-        collection_id = save_request.collection_id
-        if not collection_id:
-            collection_repo = CollectionRepository(supabase)
-            extracted_collection = await collection_repo.get_by_slug(
-                current_user["id"],
-                "extracted"
-            )
-            if not extracted_collection:
-                # Create default collections if they don't exist
-                await collection_repo.create_default_collections(current_user["id"])
-                extracted_collection = await collection_repo.get_by_slug(
-                    current_user["id"],
-                    "extracted"
-                )
-            collection_id = extracted_collection["id"]
-
-        result = await save_service.save_recipe_to_collection(
+        # Publish the draft and mark as extracted
+        result = await save_service.publish_draft_recipe(
             user_id=current_user["id"],
-            recipe_id=save_request.recipe_id,
-            collection_id=collection_id
+            recipe_id=save_request.recipe_id
         )
 
         return SaveRecipeResponse(
             recipe_id=result["recipe_id"],
-            collection_id=result["collection_id"],
-            added_to_collection=result["added_to_collection"],
+            collection_id=None,  # No collection ID in new system
+            added_to_collection=True,  # Always added to virtual "extracted" collection
             was_draft=result.get("was_draft", False)
         )
 
@@ -163,6 +145,98 @@ async def save_recipe(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save recipe: {str(e)}"
+        )
+
+
+@router.post("/{recipe_id}/favorite", response_model=SaveRecipeResponse)
+async def favorite_recipe(
+    recipe_id: str,
+    current_user: dict = Depends(get_authenticated_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """
+    Add a recipe to the user's favorites.
+
+    This sets is_favorite=true in user_recipe_data for this recipe.
+    The recipe must be public or owned by the user.
+    """
+    from app.repositories.user_recipe_repository import UserRecipeRepository
+    from app.repositories.recipe_repository import RecipeRepository
+
+    try:
+        recipe_repo = RecipeRepository(supabase)
+        user_recipe_repo = UserRecipeRepository(supabase)
+
+        # Verify recipe exists and is accessible
+        recipe = await recipe_repo.get_by_id(recipe_id)
+        if not recipe:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Recipe not found"
+            )
+
+        # Check if user can access this recipe (public or owned)
+        if not recipe["is_public"] and recipe["created_by"] != current_user["id"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have access to this recipe"
+            )
+
+        # Set favorite status
+        await user_recipe_repo.set_favorite(
+            user_id=current_user["id"],
+            recipe_id=recipe_id,
+            is_favorite=True
+        )
+
+        return SaveRecipeResponse(
+            recipe_id=recipe_id,
+            collection_id=None,  # No collection ID in new system
+            added_to_collection=True,
+            was_draft=False
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error favoriting recipe: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to favorite recipe: {str(e)}"
+        )
+
+
+@router.delete("/{recipe_id}/favorite", response_model=MessageResponse)
+async def unfavorite_recipe(
+    recipe_id: str,
+    current_user: dict = Depends(get_authenticated_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """
+    Remove a recipe from the user's favorites.
+
+    This sets is_favorite=false in user_recipe_data for this recipe.
+    This does NOT delete the recipe.
+    """
+    from app.repositories.user_recipe_repository import UserRecipeRepository
+
+    try:
+        user_recipe_repo = UserRecipeRepository(supabase)
+
+        # Set favorite status to false
+        await user_recipe_repo.set_favorite(
+            user_id=current_user["id"],
+            recipe_id=recipe_id,
+            is_favorite=False
+        )
+
+        return MessageResponse(message="Recipe removed from favorites")
+
+    except Exception as e:
+        logger.error(f"Error unfavoriting recipe: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to unfavorite recipe: {str(e)}"
         )
 
 
@@ -291,7 +365,15 @@ async def list_recipes(
         recipes = await repo.get_public_recipes(limit, offset, filters)
 
         user_id = current_user["id"] if current_user else None
-        return [await _format_list_item_response(r, user_id, supabase) for r in recipes]
+
+        # Fetch user data for authenticated users (is_favorite, times_cooked, etc.)
+        user_data_map = {}
+        if user_id:
+            user_repo = UserRecipeRepository(supabase)
+            recipe_ids = [r["id"] for r in recipes]
+            user_data_map = await user_repo.get_user_data_for_recipes(user_id, recipe_ids)
+
+        return [await _format_list_item_response(r, user_id, supabase, user_data_map.get(r["id"])) for r in recipes]
 
     except Exception as e:
         logger.error(f"Error listing recipes: {str(e)}")
