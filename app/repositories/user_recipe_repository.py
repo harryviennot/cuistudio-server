@@ -111,16 +111,28 @@ class UserRecipeRepository(BaseRepository):
     async def increment_cooked_count(
         self,
         user_id: str,
-        recipe_id: str
+        recipe_id: str,
+        rating: Optional[float] = None,
+        image_url: Optional[str] = None,
+        duration_minutes: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Increment the times cooked counter and record cooking event.
+        Increment the times cooked counter and record cooking event with session data.
 
-        This performs two operations:
-        1. Updates user_recipe_data.times_cooked (personal count)
-        2. Inserts a cooking event for time-based analytics
+        This performs multiple operations:
+        1. Inserts a cooking event with optional rating, photo, and duration
+        2. Updates user_recipe_data.times_cooked (personal count)
+        3. Updates user_recipe_data.rating if rating is provided
+        4. Updates user_recipe_data.last_cooked_at
 
         The recipes.total_times_cooked is updated automatically by database trigger.
+
+        Args:
+            user_id: User ID
+            recipe_id: Recipe ID
+            rating: Optional rating given at this cooking session (0.5-5.0)
+            image_url: Optional URL to photo taken during cooking
+            duration_minutes: Optional actual cooking time in minutes
         """
         try:
             # Get current data
@@ -129,24 +141,41 @@ class UserRecipeRepository(BaseRepository):
             times_cooked = (current["times_cooked"] if current else 0) + 1
             now = datetime.now(timezone.utc).isoformat()
 
-            # Insert cooking event for time-based analytics
-            # This enables queries like "most cooked this week"
+            # Build cooking event data
+            cooking_event_data = {
+                "user_id": user_id,
+                "recipe_id": recipe_id,
+                "cooked_at": now
+            }
+
+            # Add optional session data
+            if rating is not None:
+                cooking_event_data["rating"] = rating
+            if image_url is not None:
+                cooking_event_data["image_url"] = image_url
+            if duration_minutes is not None:
+                cooking_event_data["duration_minutes"] = duration_minutes
+
+            # Insert cooking event for time-based analytics and history
             self.supabase.table("recipe_cooking_events")\
-                .insert({
-                    "user_id": user_id,
-                    "recipe_id": recipe_id,
-                    "cooked_at": now
-                })\
+                .insert(cooking_event_data)\
                 .execute()
 
-            # Upsert with incremented count
+            # Build user_recipe_data update
+            user_data_update = {
+                "times_cooked": times_cooked,
+                "last_cooked_at": now
+            }
+
+            # If rating was provided, update the user's current rating for this recipe
+            if rating is not None:
+                user_data_update["rating"] = rating
+
+            # Upsert with incremented count and optional rating
             return await self.upsert_user_data(
                 user_id,
                 recipe_id,
-                {
-                    "times_cooked": times_cooked,
-                    "last_cooked_at": now
-                }
+                user_data_update
             )
         except Exception as e:
             logger.error(f"Error incrementing cooked count: {str(e)}")
