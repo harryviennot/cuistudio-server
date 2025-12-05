@@ -365,7 +365,15 @@ async def list_recipes(
         recipes = await repo.get_public_recipes(limit, offset, filters)
 
         user_id = current_user["id"] if current_user else None
-        return [await _format_list_item_response(r, user_id, supabase) for r in recipes]
+
+        # Fetch user data for authenticated users (is_favorite, times_cooked, etc.)
+        user_data_map = {}
+        if user_id:
+            user_repo = UserRecipeRepository(supabase)
+            recipe_ids = [r["id"] for r in recipes]
+            user_data_map = await user_repo.get_user_data_for_recipes(user_id, recipe_ids)
+
+        return [await _format_list_item_response(r, user_id, supabase, user_data_map.get(r["id"])) for r in recipes]
 
     except Exception as e:
         logger.error(f"Error listing recipes: {str(e)}")
