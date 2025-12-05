@@ -1,5 +1,9 @@
 """
 Collection API schemas
+
+Virtual collections system:
+- "extracted" = user_recipe_data WHERE was_extracted = true
+- "saved" = user_recipe_data WHERE is_favorite = true
 """
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -8,43 +12,31 @@ from datetime import datetime
 
 # ============= Request Schemas =============
 
-class CollectionCreateRequest(BaseModel):
-    """Create collection request"""
-    name: str = Field(..., min_length=1, max_length=100)
-    description: Optional[str] = None
-
-
-class CollectionUpdateRequest(BaseModel):
-    """Update collection request"""
-    name: Optional[str] = Field(None, min_length=1, max_length=100)
-    description: Optional[str] = None
-    sort_order: Optional[int] = None
-
-
-class AddRecipeToCollectionRequest(BaseModel):
-    """Add recipe to collection request"""
-    recipe_id: str
-
-
 class SaveRecipeRequest(BaseModel):
     """
-    Save a recipe to a collection.
+    Save/publish a recipe.
 
-    Used for:
-    - Publishing draft recipes after extraction preview
-    - Adding existing recipes to user's collection
+    Used for publishing draft recipes after extraction preview.
+    The collection_id field is deprecated and ignored - recipes are
+    automatically added to the virtual "extracted" collection.
     """
-    recipe_id: str = Field(..., description="Recipe ID to save")
+    recipe_id: str = Field(..., description="Recipe ID to save/publish")
     collection_id: Optional[str] = Field(
         None,
-        description="Collection ID to save to. If not provided, uses default collection based on context."
+        description="DEPRECATED: Collection ID is ignored. Recipes are automatically in 'extracted'.",
+        deprecated=True
     )
 
 
 # ============= Response Schemas =============
 
 class CollectionResponse(BaseModel):
-    """Collection response"""
+    """
+    Virtual collection response.
+
+    Collections are now computed on-the-fly from user_recipe_data.
+    The id field contains the slug for virtual collections.
+    """
     id: str
     name: str
     slug: str
@@ -52,13 +44,8 @@ class CollectionResponse(BaseModel):
     is_system: bool
     sort_order: int
     recipe_count: int = 0
-    created_at: datetime
-    updated_at: datetime
-
-
-class CollectionListResponse(BaseModel):
-    """List of collections"""
-    collections: List[CollectionResponse]
+    created_at: Optional[datetime] = None  # Optional for virtual collections
+    updated_at: Optional[datetime] = None  # Optional for virtual collections
 
 
 class CollectionRecipeResponse(BaseModel):
@@ -86,9 +73,18 @@ class CollectionWithRecipesResponse(BaseModel):
 class SaveRecipeResponse(BaseModel):
     """Response from saving a recipe"""
     recipe_id: str
-    collection_id: str
+    collection_id: Optional[str] = Field(
+        None,
+        description="DEPRECATED: Always None in new system. Recipes are in virtual collections."
+    )
     added_to_collection: bool
     was_draft: bool = Field(
         False,
         description="True if the recipe was a draft that got published"
     )
+
+
+class CollectionCountsResponse(BaseModel):
+    """Recipe counts for system collections"""
+    extracted: int = Field(..., description="Count of recipes in the 'extracted' virtual collection")
+    saved: int = Field(..., description="Count of recipes in the 'saved' virtual collection")

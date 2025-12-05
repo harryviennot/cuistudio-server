@@ -4,6 +4,7 @@ Authentication endpoints - Passwordless Authentication
 from fastapi import APIRouter, Depends, HTTPException, status
 from supabase import Client
 import logging
+import asyncio
 
 from app.core.database import get_supabase_client, get_supabase_admin_client
 from app.core.security import get_current_user
@@ -973,6 +974,9 @@ async def submit_onboarding(
                 )
 
         logger.info(f"Onboarding completed for user {user_id}")
+
+        # Note: No longer creating default collections on signup.
+        # Collections are now virtual (computed from user_recipe_data).
 
         return MessageResponse(message="Onboarding completed successfully!")
 

@@ -492,6 +492,14 @@ class ExtractionService:
                 # Return early if duplicate found
                 if duplicate_check:
                     existing_recipe_id = duplicate_check["recipe_id"]
+
+                    # Mark the recipe as extracted for this user
+                    # This ensures it appears in their "Extracted" collection
+                    await self.recipe_save_service.mark_recipe_extracted(
+                        user_id=user_id,
+                        recipe_id=existing_recipe_id
+                    )
+
                     if job_id:
                         await self._update_job_status(
                             job_id,
