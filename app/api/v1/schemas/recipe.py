@@ -219,9 +219,45 @@ class TrendingRecipeResponse(RecipeResponse):
 
 
 class UserCookingHistoryItemResponse(BaseModel):
-    """User's cooking history for a single recipe"""
+    """User's cooking history for a single cooking event"""
+    # Event identification
+    event_id: str
     recipe_id: str
     recipe_title: str
-    times_cooked: int
-    last_cooked_at: datetime
-    first_cooked_at: datetime
+
+    # Recipe info (for display)
+    recipe_image_url: Optional[str] = None
+    difficulty: Optional[DifficultyLevel] = None
+
+    # Per-event data
+    rating: Optional[float] = None  # Rating given at THIS cooking session
+    cooking_image_url: Optional[str] = None  # Photo from THIS cooking session
+    duration_minutes: Optional[int] = None  # Actual cooking time for this session
+    cooked_at: datetime
+
+    # Aggregates
+    times_cooked: int  # Total times user has cooked this recipe
+
+
+class MarkRecipeAseCookedRequest(BaseModel):
+    """Request to mark a recipe as cooked with optional session data"""
+    rating: Optional[float] = Field(None, ge=0.5, le=5.0)
+    image_url: Optional[str] = None  # URL of uploaded cooking photo
+    duration_minutes: Optional[int] = Field(None, ge=0)
+
+
+class UpdateCookingEventRequest(BaseModel):
+    """Request to update an existing cooking event"""
+    cooked_at: Optional[datetime] = None
+    rating: Optional[float] = Field(None, ge=0.5, le=5.0)
+    image_url: Optional[str] = None  # Set to explicit null to remove image
+
+
+class CookingEventResponse(BaseModel):
+    """Response for a single cooking event after update"""
+    event_id: str
+    recipe_id: str
+    cooked_at: datetime
+    rating: Optional[float] = None
+    cooking_image_url: Optional[str] = None
+    duration_minutes: Optional[int] = None

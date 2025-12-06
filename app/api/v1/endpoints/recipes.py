@@ -27,6 +27,9 @@ from app.api.v1.schemas.recipe import (
     RecipeContributorResponse,
     TrendingRecipeResponse,
     UserCookingHistoryItemResponse,
+    MarkRecipeAseCookedRequest,
+    UpdateCookingEventRequest,
+    CookingEventResponse,
 )
 from app.api.v1.schemas.collection import (
     SaveRecipeRequest,
@@ -280,6 +283,107 @@ async def search_recipes_full_text(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to search recipes: {str(e)}"
         )
+
+
+@router.get("/trending", response_model=List[TrendingRecipeResponse])
+async def get_trending_recipes(
+    time_window_days: int = Query(7, ge=1, le=365, description="Number of days to look back (default: 7 for 'this week')"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    supabase: Client = Depends(get_supabase_client)
+):
+    """
+    Get trending recipes based on cooking frequency in a time window.
+
+    This endpoint returns recipes ordered by how many times they've been cooked
+    in the specified time window. Great for discovering popular recipes!
+
+    Examples:
+    - time_window_days=7: Most cooked recipes this week
+    - time_window_days=30: Most cooked recipes this month
+    - time_window_days=1: Trending today
+
+    Returns recipes with cooking statistics including:
+    - cook_count: Number of times cooked in the time window
+    - unique_users: Number of unique users who cooked it
+    """
+    try:
+        repo = RecipeRepository(supabase)
+        trending_recipes = await repo.get_trending_recipes(
+            time_window_days=time_window_days,
+            limit=limit,
+            offset=offset
+        )
+        return trending_recipes
+    except Exception as e:
+        logger.error(f"Error fetching trending recipes: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch trending recipes")
+
+
+@router.get("/cooking-history", response_model=List[UserCookingHistoryItemResponse])
+async def get_cooking_history(
+    time_window_days: int = Query(365, ge=1, le=365, description="Number of days to look back (default: 365)"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client)
+):
+    """
+    Get the current user's cooking history as individual cooking events.
+
+    Returns each cooking session with:
+    - event_id: Unique identifier for this cooking event
+    - recipe_id, recipe_title: The recipe that was cooked
+    - recipe_image_url: The recipe's main image
+    - difficulty: Recipe difficulty level
+    - rating: The rating given at this specific cooking session (may differ from current rating)
+    - cooking_image_url: Photo taken during this cooking session (signed URL, expires in 1 hour)
+    - duration_minutes: Actual cooking time for this session
+    - cooked_at: When this cooking session occurred
+    - times_cooked: Total times the user has cooked this recipe
+
+    Note: cooking_image_url is a signed URL that expires after 1 hour for privacy.
+    The mobile app should refresh the cooking history if images fail to load after extended viewing.
+    """
+    from app.services.upload_service import UploadService
+
+    try:
+        repo = RecipeRepository(supabase)
+        upload_service = UploadService(supabase)
+
+        cooking_history = await repo.get_user_cooking_history(
+            user_id=current_user["id"],
+            time_window_days=time_window_days,
+            limit=limit,
+            offset=offset
+        )
+
+        # Generate signed URLs for cooking photos (private bucket)
+        for event in cooking_history:
+            if event.get("cooking_image_url"):
+                stored_url = event["cooking_image_url"]
+                # Extract path from stored URL
+                path = UploadService.extract_storage_path(stored_url, "cooking-events")
+
+                if path:
+                    # Generate fresh signed URL
+                    signed_url = upload_service.create_signed_url(
+                        bucket="cooking-events",
+                        path=path,
+                        expires_in=3600  # 1 hour
+                    )
+                    if signed_url:
+                        event["cooking_image_url"] = signed_url
+                    else:
+                        # If signed URL generation fails, clear the URL
+                        # rather than returning an inaccessible public URL
+                        logger.warning(f"Failed to generate signed URL for cooking photo: {path}")
+                        event["cooking_image_url"] = None
+
+        return cooking_history
+    except Exception as e:
+        logger.error(f"Error fetching cooking history: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch cooking history")
 
 
 @router.get("/{recipe_id}", response_model=RecipeResponse)
@@ -665,13 +769,35 @@ async def update_user_recipe_data(
 @router.post("/{recipe_id}/cooked", response_model=MessageResponse)
 async def mark_recipe_cooked(
     recipe_id: str,
+    request: Optional[MarkRecipeAseCookedRequest] = None,
     current_user: dict = Depends(get_current_user),
     supabase: Client = Depends(get_supabase_admin_client)
 ):
-    """Mark a recipe as cooked (increments cooked count)"""
+    """
+    Mark a recipe as cooked with optional session data.
+
+    Creates a cooking event record with:
+    - rating: Optional rating given at this cooking session (0.5-5.0)
+    - image_url: Optional URL to a photo taken during cooking
+    - duration_minutes: Optional actual cooking time in minutes
+
+    If rating is provided, it also updates the user's current rating for the recipe.
+    """
     try:
         repo = UserRecipeRepository(supabase)
-        await repo.increment_cooked_count(current_user["id"], recipe_id)
+
+        # Extract optional session data
+        rating = request.rating if request else None
+        image_url = request.image_url if request else None
+        duration_minutes = request.duration_minutes if request else None
+
+        await repo.increment_cooked_count(
+            user_id=current_user["id"],
+            recipe_id=recipe_id,
+            rating=rating,
+            image_url=image_url,
+            duration_minutes=duration_minutes
+        )
 
         return MessageResponse(message="Recipe marked as cooked")
 
@@ -680,6 +806,149 @@ async def mark_recipe_cooked(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to mark recipe as cooked: {str(e)}"
+        )
+
+
+@router.patch("/cooking-events/{event_id}", response_model=CookingEventResponse)
+async def update_cooking_event(
+    event_id: str,
+    request: UpdateCookingEventRequest,
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """
+    Update a cooking event.
+
+    Only the owner can update their own events.
+    Can update:
+    - cooked_at: When the cooking happened
+    - rating: Rating given for this session (0.5-5.0)
+    - image_url: Photo from cooking (set to null to remove)
+    """
+    from app.services.upload_service import UploadService
+
+    try:
+        repo = UserRecipeRepository(supabase)
+        upload_service = UploadService(supabase)
+
+        # Check if we need to remove the existing image
+        remove_image = False
+        old_image_url = None
+
+        if request.image_url is None:
+            # Check if this is an explicit null (remove image) vs not provided
+            # We need to check the raw request to distinguish
+            existing = await repo.get_cooking_event(event_id, current_user["id"])
+            if existing and existing.get("image_url"):
+                # User wants to remove the image
+                remove_image = True
+                old_image_url = existing["image_url"]
+
+        # Update the event
+        updated = await repo.update_cooking_event(
+            event_id=event_id,
+            user_id=current_user["id"],
+            cooked_at=request.cooked_at,
+            rating=request.rating,
+            image_url=request.image_url if request.image_url else None,
+            remove_image=remove_image
+        )
+
+        if not updated:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Cooking event not found or you don't have permission to edit it"
+            )
+
+        # If we removed the image, delete it from storage
+        if remove_image and old_image_url:
+            path = UploadService.extract_storage_path(old_image_url, "cooking-events")
+            if path:
+                try:
+                    await upload_service.delete_image(path, bucket="cooking-events")
+                except Exception as e:
+                    logger.warning(f"Failed to delete old cooking image: {str(e)}")
+
+        # Generate signed URL for cooking photo if present
+        cooking_image_url = None
+        if updated.get("image_url"):
+            path = UploadService.extract_storage_path(updated["image_url"], "cooking-events")
+            if path:
+                cooking_image_url = upload_service.create_signed_url(
+                    bucket="cooking-events",
+                    path=path,
+                    expires_in=3600
+                )
+
+        return CookingEventResponse(
+            event_id=updated["id"],
+            recipe_id=updated["recipe_id"],
+            cooked_at=updated["cooked_at"],
+            rating=updated.get("rating"),
+            cooking_image_url=cooking_image_url,
+            duration_minutes=updated.get("duration_minutes")
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating cooking event: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update cooking event: {str(e)}"
+        )
+
+
+@router.delete("/cooking-events/{event_id}", response_model=MessageResponse)
+async def delete_cooking_event(
+    event_id: str,
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """
+    Delete a cooking event.
+
+    Only the owner can delete their own events.
+    Also:
+    - Decrements times_cooked in user_recipe_data
+    - Deletes associated image from storage if exists
+    """
+    from app.services.upload_service import UploadService
+
+    try:
+        repo = UserRecipeRepository(supabase)
+        upload_service = UploadService(supabase)
+
+        # Delete the event (returns the deleted event data)
+        deleted = await repo.delete_cooking_event(
+            event_id=event_id,
+            user_id=current_user["id"]
+        )
+
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Cooking event not found or you don't have permission to delete it"
+            )
+
+        # If there was an image, delete it from storage
+        if deleted.get("image_url"):
+            path = UploadService.extract_storage_path(deleted["image_url"], "cooking-events")
+            if path:
+                try:
+                    await upload_service.delete_image(path, bucket="cooking-events")
+                except Exception as e:
+                    logger.warning(f"Failed to delete cooking image: {str(e)}")
+
+        return MessageResponse(message="Cooking event deleted successfully")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting cooking event: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete cooking event: {str(e)}"
         )
 
 
@@ -948,68 +1217,3 @@ async def update_recipe_rating(
     except Exception as e:
         logger.error(f"Error updating recipe rating: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to update recipe rating")
-
-
-@router.get("/trending", response_model=List[TrendingRecipeResponse])
-async def get_trending_recipes(
-    time_window_days: int = Query(7, ge=1, le=365, description="Number of days to look back (default: 7 for 'this week')"),
-    limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    supabase: Client = Depends(get_supabase_client)
-):
-    """
-    Get trending recipes based on cooking frequency in a time window.
-
-    This endpoint returns recipes ordered by how many times they've been cooked
-    in the specified time window. Great for discovering popular recipes!
-
-    Examples:
-    - time_window_days=7: Most cooked recipes this week
-    - time_window_days=30: Most cooked recipes this month
-    - time_window_days=1: Trending today
-
-    Returns recipes with cooking statistics including:
-    - cook_count: Number of times cooked in the time window
-    - unique_users: Number of unique users who cooked it
-    """
-    try:
-        repo = RecipeRepository(supabase)
-        trending_recipes = await repo.get_trending_recipes(
-            time_window_days=time_window_days,
-            limit=limit,
-            offset=offset
-        )
-        return trending_recipes
-    except Exception as e:
-        logger.error(f"Error fetching trending recipes: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to fetch trending recipes")
-
-
-@router.get("/cooking-history", response_model=List[UserCookingHistoryItemResponse])
-async def get_cooking_history(
-    time_window_days: int = Query(30, ge=1, le=365, description="Number of days to look back (default: 30)"),
-    limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    current_user: dict = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
-):
-    """
-    Get the current user's cooking history in a time window.
-
-    Returns recipes the user has cooked recently with statistics:
-    - times_cooked: How many times they cooked it in the time window
-    - last_cooked_at: When they last cooked it
-    - first_cooked_at: When they first cooked it (in this time window)
-    """
-    try:
-        repo = RecipeRepository(supabase)
-        cooking_history = await repo.get_user_cooking_history(
-            user_id=current_user["id"],
-            time_window_days=time_window_days,
-            limit=limit,
-            offset=offset
-        )
-        return cooking_history
-    except Exception as e:
-        logger.error(f"Error fetching cooking history: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to fetch cooking history")
