@@ -10,12 +10,13 @@ This module handles all discovery-related endpoints:
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from supabase import Client
-from typing import List
+from typing import List, Dict, Any
 import logging
 
 from app.core.database import get_supabase_client
 from app.core.security import get_current_user
 from app.repositories.recipe_repository import RecipeRepository
+from app.domain.models import RecipeTimings, Ingredient, Instruction
 from app.api.v1.schemas.recipe import (
     TrendingRecipeResponse,
     UserCookingHistoryItemResponse,
@@ -29,6 +30,48 @@ from app.api.v1.schemas.discovery import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/discovery", tags=["Discovery"])
+
+
+def _transform_recipe_for_response(recipe: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Transform raw database recipe data to match RecipeResponse schema.
+
+    This converts individual timing columns into a timings object and
+    ensures ingredients/instructions are properly formatted.
+    """
+    # Build timings object from individual columns
+    if recipe.get("prep_time_minutes") or recipe.get("cook_time_minutes") or recipe.get("total_time_minutes"):
+        recipe["timings"] = RecipeTimings(
+            prep_time_minutes=recipe.get("prep_time_minutes"),
+            cook_time_minutes=recipe.get("cook_time_minutes"),
+            total_time_minutes=recipe.get("total_time_minutes")
+        )
+    else:
+        recipe["timings"] = None
+
+    # Ensure ingredients are properly formatted
+    if recipe.get("ingredients"):
+        recipe["ingredients"] = [
+            Ingredient(**ing) if isinstance(ing, dict) else ing
+            for ing in recipe["ingredients"]
+        ]
+    else:
+        recipe["ingredients"] = []
+
+    # Ensure instructions are properly formatted
+    if recipe.get("instructions"):
+        recipe["instructions"] = [
+            Instruction(**inst) if isinstance(inst, dict) else inst
+            for inst in recipe["instructions"]
+        ]
+    else:
+        recipe["instructions"] = []
+
+    # Ensure contributors is a list (even if empty)
+    if not recipe.get("contributors"):
+        recipe["contributors"] = []
+
+    return recipe
 
 
 @router.get("/trending", response_model=List[TrendingRecipeResponse])
@@ -60,7 +103,8 @@ async def get_trending_recipes(
             limit=limit,
             offset=offset
         )
-        return trending_recipes
+        # Transform each recipe to match the response schema
+        return [_transform_recipe_for_response(recipe) for recipe in trending_recipes]
     except Exception as e:
         logger.error(f"Error fetching trending recipes: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to fetch trending recipes")
@@ -160,7 +204,8 @@ async def get_most_extracted_recipes(
             limit=limit,
             offset=offset
         )
-        return extracted_recipes
+        # Transform each recipe to match the response schema
+        return [_transform_recipe_for_response(recipe) for recipe in extracted_recipes]
     except Exception as e:
         logger.error(f"Error fetching most extracted recipes: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to fetch most extracted recipes")
@@ -190,7 +235,8 @@ async def get_highest_rated_recipes(
             limit=limit,
             offset=offset
         )
-        return rated_recipes
+        # Transform each recipe to match the response schema
+        return [_transform_recipe_for_response(recipe) for recipe in rated_recipes]
     except Exception as e:
         logger.error(f"Error fetching highest rated recipes: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to fetch highest rated recipes")
@@ -214,7 +260,8 @@ async def get_recent_recipes(
             limit=limit,
             offset=offset
         )
-        return recent_recipes
+        # Transform each recipe to match the response schema
+        return [_transform_recipe_for_response(recipe) for recipe in recent_recipes]
     except Exception as e:
         logger.error(f"Error fetching recent recipes: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to fetch recent recipes")

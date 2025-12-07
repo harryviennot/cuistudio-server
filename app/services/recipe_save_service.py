@@ -13,6 +13,7 @@ from app.repositories.user_recipe_repository import UserRecipeRepository
 from app.repositories.video_source_repository import VideoSourceRepository
 from app.repositories.video_creator_repository import VideoCreatorRepository
 from app.services.video_url_parser import VideoURLParser
+from app.services.thumbnail_cache_service import ThumbnailCacheService
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class RecipeSaveService:
         self.user_recipe_repo = UserRecipeRepository(supabase)
         self.video_source_repo = VideoSourceRepository(supabase)
         self.video_creator_repo = VideoCreatorRepository(supabase)
+        self.thumbnail_cache = ThumbnailCacheService(supabase)
 
     async def publish_draft_recipe(
         self,
@@ -219,6 +221,20 @@ class RecipeSaveService:
                     video_metadata=video_metadata,
                     source_url=source_url
                 )
+
+                # Cache video thumbnail to Supabase Storage
+                # This prevents broken images when platforms change thumbnail URLs
+                thumbnail_url = video_metadata.get("thumbnail_url")
+                if thumbnail_url:
+                    cached_url = await self.thumbnail_cache.cache_thumbnail(
+                        thumbnail_url=thumbnail_url,
+                        recipe_id=recipe_id,
+                        user_id=user_id
+                    )
+                    if cached_url:
+                        # Update recipe with our cached thumbnail URL
+                        await self.recipe_repo.update(recipe_id, {"image_url": cached_url})
+                        logger.info(f"Cached video thumbnail for recipe {recipe_id}")
 
             # Update job with recipe_id if provided
             if job_id:
