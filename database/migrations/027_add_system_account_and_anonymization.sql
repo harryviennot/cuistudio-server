@@ -1,6 +1,7 @@
--- Migration: 027_add_system_account_and_anonymization
--- Description: Add system account for transferred recipes and support contributor anonymization
+-- Migration: 027_add_contributor_anonymization
+-- Description: Support contributor anonymization for deleted users
 -- Date: 2024-12-07
+-- Applied via Supabase MCP
 
 -- =============================================
 -- 1. Add display_name column for anonymization
@@ -43,29 +44,32 @@ ON recipe_contributors (recipe_id, COALESCE(user_id, '00000000-0000-0000-0000-00
 
 
 -- =============================================
--- 3. Create system account in public.users
--- =============================================
-
--- Note: The auth.users entry must be created via Supabase dashboard or admin API
--- This creates the corresponding public.users entry
--- The system account is used to own transferred recipes (e.g., from deleted users)
-
-INSERT INTO public.users (id, name, date_of_birth, email, profile_completed, onboarding_completed)
-VALUES (
-    '00000000-0000-0000-0000-000000000000',
-    'Cuistudio',
-    '2024-01-01',
-    'system@cuisto.app',
-    true,
-    true
-)
-ON CONFLICT (id) DO NOTHING;
-
-
--- =============================================
--- 4. Add index for efficient lookup by display_name
+-- 3. Add index for efficient lookup by display_name
 -- =============================================
 
 CREATE INDEX IF NOT EXISTS idx_recipe_contributors_display_name
 ON recipe_contributors (display_name)
 WHERE display_name IS NOT NULL;
+
+
+-- =============================================
+-- NOTE: System Account Creation
+-- =============================================
+-- The system account (00000000-0000-0000-0000-000000000000) requires:
+-- 1. First create entry in auth.users via Supabase Admin API or Dashboard
+-- 2. Then create corresponding public.users entry
+--
+-- This cannot be done via migration because public.users has FK to auth.users.
+--
+-- For now, video-extracted recipes transfer works without system account:
+-- - The backend code sets created_by = SYSTEM_ACCOUNT_ID
+-- - This will fail FK constraint until system account exists
+-- - Alternative: Keep recipes with deleted user or use NULL
+--
+-- To create system account manually:
+-- 1. Use Supabase Dashboard > Authentication > Users > Create User
+-- 2. Set id = 00000000-0000-0000-0000-000000000000
+-- 3. Then run:
+--    INSERT INTO public.users (id, name, profile_completed, onboarding_completed)
+--    VALUES ('00000000-0000-0000-0000-000000000000', 'Cuistudio', true, true)
+--    ON CONFLICT (id) DO NOTHING;

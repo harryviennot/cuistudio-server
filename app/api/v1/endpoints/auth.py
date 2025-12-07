@@ -1,12 +1,14 @@
 """
 Authentication endpoints - Passwordless Authentication
 """
-from fastapi import APIRouter, Depends, HTTPException, status
-from supabase import Client
+from fastapi import APIRouter, Depends, HTTPException, status, Header
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from supabase import Client, create_client
 import logging
 import asyncio
 
 from app.core.database import get_supabase_client, get_supabase_admin_client
+from app.core.config import get_settings
 from app.core.security import get_current_user
 from app.api.v1.schemas.auth import (
     EmailAuthRequest,
@@ -20,6 +22,7 @@ from app.api.v1.schemas.auth import (
     LinkEmailIdentityRequest,
     LinkPhoneIdentityRequest,
     ChangeEmailRequest,
+    VerifyEmailChangeRequest,
     AuthResponse,
     UserResponse
 )
@@ -27,6 +30,7 @@ from app.api.v1.schemas.common import MessageResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+security = HTTPBearer()
 
 
 # ============================================================================
@@ -144,7 +148,6 @@ async def link_email_identity(
                 detail="User already has an email identity"
             )
 
-        from app.core.config import get_settings
         settings = get_settings()
 
         # Update user with email identity via magic link
@@ -324,7 +327,6 @@ async def send_email_otp(
     - Time-limited validity (3 minutes)
     """
     try:
-        from app.core.config import get_settings
         settings = get_settings()
 
         # sign_in_with_otp creates user if doesn't exist, sends OTP for both cases
@@ -1248,8 +1250,8 @@ SYSTEM_ACCOUNT_ID = "00000000-0000-0000-0000-000000000000"
 )
 async def change_email(
     request: ChangeEmailRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     current_user: dict = Depends(get_current_user),
-    admin_client: Client = Depends(get_supabase_admin_client)
 ):
     """
     ## Change Account Email
@@ -1272,24 +1274,61 @@ async def change_email(
     """
     try:
         user_id = current_user["id"]
+        token = credentials.credentials
 
-        # Update user email via admin client (triggers verification email)
-        admin_client.auth.admin.update_user_by_id(
-            user_id,
-            {"email": request.new_email}
-        )
+        # Create a user-authenticated Supabase client
+        # This triggers the proper email verification flow (sends "Change Email Address" template)
+        settings = get_settings()
+        user_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_PUBLISHABLE_KEY)
+        user_client.auth.set_session(token, token)
 
-        logger.info(f"Email change initiated for user {user_id} to {request.new_email}")
+        # Use update_user() which triggers email verification flow
+        # Unlike admin.update_user_by_id(), this sends the verification email
+        # The redirect URL is configured in Supabase Dashboard:
+        # 1. Go to Auth > Email Templates > Change Email Address
+        # 2. Use {{ .SiteURL }}/auth/email-confirmed as redirect in the template
+        response = user_client.auth.update_user({"email": request.new_email})
 
-        return MessageResponse(
-            message="Verification email sent! Please check your new email address to confirm the change."
-        )
+        if response.user:
+            logger.info(f"Email change initiated for user {user_id} to {request.new_email}")
+            return MessageResponse(
+                message="Verification email sent! Please check your new email address to confirm the change."
+            )
+
+        # If no user returned, something went wrong
+        raise Exception("Failed to initiate email change - no user returned")
 
     except Exception as e:
-        error_message = str(e).lower()
-        logger.error(f"Email change error for user {current_user['id']}: {str(e)}")
+        error_message = str(e)
+        error_message_lower = error_message.lower()
+        logger.error(f"Email change error for user {current_user['id']}: {error_message}")
 
-        if "already registered" in error_message or "already exists" in error_message:
+        # Rate limit detection - Supabase returns "For security purposes, you can only request this after X seconds"
+        if "security purposes" in error_message_lower and "seconds" in error_message_lower:
+            # Extract the number of seconds from the message
+            import re
+            match = re.search(r'after (\d+) seconds', error_message)
+            seconds = match.group(1) if match else "a few"
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Please wait {seconds} seconds before requesting another code."
+            )
+
+        # Comprehensive duplicate email detection patterns
+        duplicate_indicators = [
+            "already registered",
+            "already exists",
+            "duplicate",
+            "unique constraint",
+            "email_unique",
+            "email address already",
+            "user with this email",
+            "email taken",
+            "email is already",
+            "a user with this email address has already been registered"
+        ]
+
+        if any(indicator in error_message_lower for indicator in duplicate_indicators):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="This email is already registered to another account."
@@ -1298,6 +1337,165 @@ async def change_email(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to initiate email change. Please try again."
+        )
+
+
+@router.post(
+    "/email/change/verify",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Verify Email Change with OTP",
+    description="Verifies email change using the 6-digit OTP code. Handles both single and double confirmation flows.",
+    responses={
+        200: {
+            "description": "Email changed successfully or second OTP sent",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "complete": {"value": {"message": "Email changed successfully!"}},
+                        "second_otp": {"value": {"message": "SECOND_OTP_SENT"}}
+                    }
+                }
+            }
+        },
+        400: {"description": "Invalid or expired OTP code"},
+        401: {"description": "Not authenticated"},
+        500: {"description": "Server error"}
+    }
+)
+async def verify_email_change(
+    request: VerifyEmailChangeRequest,
+    authorization: str = Header(..., description="Bearer token"),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    ## Verify Email Change with OTP
+
+    Verifies the OTP code for email change. With "Secure email change" enabled
+    in Supabase, this is a two-step process:
+
+    **Flow (Secure email change enabled):**
+    1. User initiates email change via `/email/change` endpoint
+    2. Supabase sends OTP code to the CURRENT email address
+    3. User enters the OTP code → this endpoint verifies it
+    4. Supabase then sends a SECOND OTP to the NEW email address
+    5. User enters that OTP → this endpoint verifies it and completes the change
+
+    **Response:**
+    - `{"message": "SECOND_OTP_SENT"}` - First OTP verified, second OTP sent to new email
+    - `{"message": "Email changed successfully!"}` - Email change complete
+
+    **Note:** The email is only changed after ALL required OTP verifications pass.
+    If any verification fails, the original email remains unchanged.
+
+    **Authentication:**
+    - Requires valid JWT access token in Authorization header
+    - Format: `Authorization: Bearer <access_token>`
+    """
+    user_id = current_user["id"]
+    current_email = current_user.get("email")
+
+    if not current_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No email associated with this account."
+        )
+
+    try:
+        # Extract the token from the Authorization header
+        token = authorization.replace("Bearer ", "") if authorization.startswith("Bearer ") else authorization
+
+        # Create a user-authenticated client
+        settings = get_settings()
+        user_client = create_client(settings.SUPABASE_URL, settings.SUPABASE_PUBLISHABLE_KEY)
+        user_client.auth.set_session(token, token)
+
+        # Determine which email to use for verification
+        # - First step: verify OTP sent to current email
+        # - Second step: verify OTP sent to new email (request.email)
+        # We try the new email first (second step), then fall back to current email (first step)
+
+        # Try verifying with the new email first (second step of secure email change)
+        try:
+            response = user_client.auth.verify_otp({
+                "email": request.email,
+                "token": request.token,
+                "type": "email_change"
+            })
+
+            if hasattr(response, 'user') and response.user:
+                logger.info(f"Email successfully changed for user {user_id} to {request.email}")
+                return MessageResponse(message="Email changed successfully!")
+        except Exception as new_email_error:
+            error_str = str(new_email_error)
+            # Check if this is a "second OTP sent" response disguised as an error
+            # Supabase returns {'code': '200', 'msg': 'Confirmation sent to the other email'}
+            # which the Python client incorrectly tries to parse as a User object
+            if "confirmation sent to the other email" in error_str.lower() or "sent to the other email" in error_str.lower():
+                logger.info(f"First OTP verified for user {user_id}, second OTP sent to {request.email}")
+                return MessageResponse(message="SECOND_OTP_SENT")
+            logger.debug(f"New email verification failed, trying current email: {error_str}")
+
+        # Try verifying with current email (first step of secure email change)
+        try:
+            response = user_client.auth.verify_otp({
+                "email": current_email,
+                "token": request.token,
+                "type": "email_change"
+            })
+
+            # Check if this triggered a second OTP to the new email
+            if hasattr(response, 'user') and response.user:
+                logger.info(f"Email successfully changed for user {user_id} from {current_email} to {request.email}")
+                return MessageResponse(message="Email changed successfully!")
+
+            # If we get here with a 200-like response but no user, it means
+            # the first OTP was verified and a second OTP was sent to the new email
+            logger.info(f"First OTP verified for user {user_id}, second OTP sent to {request.email}")
+            return MessageResponse(message="SECOND_OTP_SENT")
+
+        except Exception as current_email_error:
+            error_str = str(current_email_error)
+            logger.debug(f"Current email verification exception: {error_str}")
+            # Check if this is a "second OTP sent" response disguised as an error
+            # The Supabase Python client throws a Pydantic validation error when it receives
+            # {'code': '200', 'msg': 'Confirmation sent to the other email'} instead of a User object
+            if "other email" in error_str.lower() or "'code': '200'" in error_str.lower():
+                logger.info(f"First OTP verified for user {user_id}, second OTP sent to {request.email}")
+                return MessageResponse(message="SECOND_OTP_SENT")
+            # Re-raise for the outer exception handler
+            raise
+
+    except Exception as e:
+        error_message = str(e)
+        error_message_lower = error_message.lower()
+
+        # Check if this is a "second OTP sent" response disguised as an error (fallback check)
+        # The Supabase Python client throws a Pydantic validation error when it receives
+        # {'code': '200', 'msg': 'Confirmation sent to the other email'} instead of a User object
+        if "other email" in error_message_lower or "'code': '200'" in error_message:
+            logger.info(f"First OTP verified for user {user_id}, second OTP sent to {request.email} (caught in outer handler)")
+            return MessageResponse(message="SECOND_OTP_SENT")
+
+        logger.error(f"Email change verification error for user {user_id}: {error_message}")
+
+        # Check for invalid/expired OTP errors
+        invalid_otp_indicators = [
+            "invalid",
+            "expired",
+            "not found",
+            "incorrect"
+        ]
+
+        if any(indicator in error_message_lower for indicator in invalid_otp_indicators):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired verification code. Please request a new one."
+            )
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to verify email change. Please try again."
         )
 
 
@@ -1357,25 +1555,37 @@ async def delete_account(
 
         logger.info(f"Starting account deletion for user {user_id}")
 
-        # Step 1: Find recipes with video_sources (URL-extracted recipes)
+        # Step 1: Find video-extracted recipes owned by this user
         # These should be transferred to the system account, not deleted
-        video_recipes_result = admin_client.from_("video_sources")\
-            .select("recipe_id")\
+        video_recipes_result = admin_client.from_("recipes")\
+            .select("id")\
+            .eq("created_by", user_id)\
+            .eq("source_type", "video")\
             .execute()
 
         video_recipe_ids = []
         if video_recipes_result.data:
-            video_recipe_ids = [r["recipe_id"] for r in video_recipes_result.data]
+            video_recipe_ids = [r["id"] for r in video_recipes_result.data]
 
-        # Step 2: Transfer video-extracted recipes to system account
+        # Step 2: Transfer video-extracted recipes to system account (if it exists)
         if video_recipe_ids:
-            admin_client.from_("recipes")\
-                .update({"created_by": SYSTEM_ACCOUNT_ID})\
-                .eq("created_by", user_id)\
-                .in_("id", video_recipe_ids)\
+            # Check if system account exists
+            system_account = admin_client.from_("users")\
+                .select("id")\
+                .eq("id", SYSTEM_ACCOUNT_ID)\
                 .execute()
 
-            logger.info(f"Transferred {len(video_recipe_ids)} video-extracted recipes to system account")
+            if system_account.data:
+                # System account exists, transfer recipes
+                admin_client.from_("recipes")\
+                    .update({"created_by": SYSTEM_ACCOUNT_ID})\
+                    .in_("id", video_recipe_ids)\
+                    .execute()
+                logger.info(f"Transferred {len(video_recipe_ids)} video-extracted recipes to system account")
+            else:
+                # System account doesn't exist - these recipes will be deleted by CASCADE
+                # This is acceptable for now; video content attribution is preserved in video_sources table
+                logger.warning(f"System account not found. {len(video_recipe_ids)} video-extracted recipes will be deleted with user.")
 
         # Step 3: Anonymize contributor records
         # Set display_name to "[Deleted User]" and user_id to NULL

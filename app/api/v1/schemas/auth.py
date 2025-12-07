@@ -220,3 +220,28 @@ class ChangeEmailRequest(BaseModel):
             }
         }
     }
+
+
+class VerifyEmailChangeRequest(BaseModel):
+    """Verify email change with OTP code"""
+    email: EmailStr = Field(
+        ...,
+        examples=["newemail@example.com"],
+        description="The new email address that received the OTP"
+    )
+    token: str = Field(
+        ...,
+        min_length=6,
+        max_length=6,
+        examples=["123456"],
+        description="6-digit OTP code from email"
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "email": "newemail@example.com",
+                "token": "123456"
+            }
+        }
+    }

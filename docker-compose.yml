@@ -41,6 +41,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - APP_ENV=${APP_ENV:-development}
       - REDIS_URL=redis://redis:6379/0
+      - SITE_URL=${SITE_URL}
     env_file:
       - .env
     volumes:
