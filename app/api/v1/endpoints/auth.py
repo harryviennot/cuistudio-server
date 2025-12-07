@@ -19,6 +19,7 @@ from app.api.v1.schemas.auth import (
     RefreshTokenRequest,
     LinkEmailIdentityRequest,
     LinkPhoneIdentityRequest,
+    ChangeEmailRequest,
     AuthResponse,
     UserResponse
 )
@@ -1216,4 +1217,198 @@ async def refresh_token(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Token refresh failed: {str(e)}"
+        )
+
+
+# ============================================================================
+# ACCOUNT MANAGEMENT
+# ============================================================================
+
+SYSTEM_ACCOUNT_ID = "00000000-0000-0000-0000-000000000000"
+
+
+@router.post(
+    "/email/change",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Request Email Change",
+    description="Initiates email change process. Sends verification to new email address.",
+    responses={
+        200: {
+            "description": "Verification email sent",
+            "content": {
+                "application/json": {
+                    "example": {"message": "Verification email sent! Please check your new email address to confirm the change."}
+                }
+            }
+        },
+        400: {"description": "Email already in use"},
+        401: {"description": "Not authenticated"}
+    }
+)
+async def change_email(
+    request: ChangeEmailRequest,
+    current_user: dict = Depends(get_current_user),
+    admin_client: Client = Depends(get_supabase_admin_client)
+):
+    """
+    ## Change Account Email
+
+    Initiates the email change process for passwordless authentication.
+
+    **Flow:**
+    1. User submits new email address
+    2. Supabase sends verification email to the new address
+    3. User clicks verification link in email
+    4. Email is updated in auth.users
+
+    **Note:**
+    - Old email remains active until new email is verified
+    - User should sign in with new email after verification
+
+    **Authentication:**
+    - Requires valid JWT access token in Authorization header
+    - Format: `Authorization: Bearer <access_token>`
+    """
+    try:
+        user_id = current_user["id"]
+
+        # Update user email via admin client (triggers verification email)
+        admin_client.auth.admin.update_user_by_id(
+            user_id,
+            {"email": request.new_email}
+        )
+
+        logger.info(f"Email change initiated for user {user_id} to {request.new_email}")
+
+        return MessageResponse(
+            message="Verification email sent! Please check your new email address to confirm the change."
+        )
+
+    except Exception as e:
+        error_message = str(e).lower()
+        logger.error(f"Email change error for user {current_user['id']}: {str(e)}")
+
+        if "already registered" in error_message or "already exists" in error_message:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This email is already registered to another account."
+            )
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to initiate email change. Please try again."
+        )
+
+
+@router.delete(
+    "/account",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Delete Account",
+    description="Permanently deletes the user account and associated data.",
+    responses={
+        200: {
+            "description": "Account deleted successfully",
+            "content": {
+                "application/json": {
+                    "example": {"message": "Account deleted successfully."}
+                }
+            }
+        },
+        401: {"description": "Not authenticated"},
+        500: {"description": "Server error"}
+    }
+)
+async def delete_account(
+    current_user: dict = Depends(get_current_user),
+    admin_client: Client = Depends(get_supabase_admin_client)
+):
+    """
+    ## Delete Account
+
+    Permanently deletes the user account with the following data handling:
+
+    **Transferred to System Account:**
+    - Recipes extracted from video URLs (TikTok, Instagram, YouTube)
+
+    **Deleted:**
+    - User's original recipes (non-video-extracted)
+    - User profile data
+    - User preferences and settings
+    - Saved/bookmarked recipes
+    - Cooking history
+
+    **Anonymized:**
+    - Fork attribution in recipe_contributors becomes "[Deleted User]"
+
+    **Storage Cleanup:**
+    - Recipe images owned by user
+    - Cooking event photos
+
+    **Warning:** This action is irreversible.
+
+    **Authentication:**
+    - Requires valid JWT access token in Authorization header
+    - Format: `Authorization: Bearer <access_token>`
+    """
+    try:
+        user_id = current_user["id"]
+
+        logger.info(f"Starting account deletion for user {user_id}")
+
+        # Step 1: Find recipes with video_sources (URL-extracted recipes)
+        # These should be transferred to the system account, not deleted
+        video_recipes_result = admin_client.from_("video_sources")\
+            .select("recipe_id")\
+            .execute()
+
+        video_recipe_ids = []
+        if video_recipes_result.data:
+            video_recipe_ids = [r["recipe_id"] for r in video_recipes_result.data]
+
+        # Step 2: Transfer video-extracted recipes to system account
+        if video_recipe_ids:
+            admin_client.from_("recipes")\
+                .update({"created_by": SYSTEM_ACCOUNT_ID})\
+                .eq("created_by", user_id)\
+                .in_("id", video_recipe_ids)\
+                .execute()
+
+            logger.info(f"Transferred {len(video_recipe_ids)} video-extracted recipes to system account")
+
+        # Step 3: Anonymize contributor records
+        # Set display_name to "[Deleted User]" and user_id to NULL
+        admin_client.from_("recipe_contributors")\
+            .update({"display_name": "[Deleted User]", "user_id": None})\
+            .eq("user_id", user_id)\
+            .execute()
+
+        logger.info(f"Anonymized contributor records for user {user_id}")
+
+        # Step 4: Clean up storage (recipe-images and cooking-events buckets)
+        for bucket_name in ["recipe-images", "cooking-events"]:
+            try:
+                # List files in user's folder
+                files = admin_client.storage.from_(bucket_name).list(path=user_id)
+                if files:
+                    file_paths = [f"{user_id}/{f['name']}" for f in files]
+                    admin_client.storage.from_(bucket_name).remove(file_paths)
+                    logger.info(f"Deleted {len(file_paths)} files from {bucket_name}/{user_id}")
+            except Exception as storage_error:
+                # Non-critical - log and continue
+                logger.warning(f"Storage cleanup error for {bucket_name}/{user_id} (non-critical): {storage_error}")
+
+        # Step 5: Delete auth user (CASCADE handles public.users, remaining recipes, etc.)
+        admin_client.auth.admin.delete_user(user_id)
+
+        logger.info(f"Account deletion completed for user {user_id}")
+
+        return MessageResponse(message="Account deleted successfully.")
+
+    except Exception as e:
+        logger.error(f"Account deletion error for user {current_user['id']}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete account. Please contact support."
         )

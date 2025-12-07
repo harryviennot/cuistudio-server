@@ -199,3 +199,24 @@ class LinkPhoneIdentityRequest(BaseModel):
             }
         }
     }
+
+
+# ============================================================================
+# ACCOUNT MANAGEMENT
+# ============================================================================
+
+class ChangeEmailRequest(BaseModel):
+    """Request to change account email"""
+    new_email: EmailStr = Field(
+        ...,
+        examples=["newemail@example.com"],
+        description="New email address to change to"
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "new_email": "newemail@example.com"
+            }
+        }
+    }
