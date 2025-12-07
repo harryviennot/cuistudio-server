@@ -497,3 +497,163 @@ class RecipeRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Error fetching user cooking history: {str(e)}")
             raise
+
+    async def get_most_extracted_recipes(
+        self,
+        source_category: str,
+        limit: int = 8,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        Get most extracted public recipes by source category.
+
+        Args:
+            source_category: 'video' for social media (TikTok, Instagram, YouTube),
+                           'website' for recipe websites/URLs
+            limit: Maximum number of recipes to return
+            offset: Number of results to skip for pagination
+
+        Returns:
+            List of recipes with extraction statistics, ordered by extraction count
+        """
+        try:
+            # First, get extraction counts per recipe from user_recipe_data
+            # We need to count recipes that were extracted by multiple users
+
+            if source_category == "video":
+                # Video sources: recipes that have a video_sources record
+                # Query: recipes joined with video_sources, then count extractions
+                query = """
+                    SELECT
+                        r.id as recipe_id,
+                        COUNT(DISTINCT urd.user_id) as extraction_count,
+                        COUNT(DISTINCT urd.user_id) as unique_extractors
+                    FROM recipes r
+                    INNER JOIN video_sources vs ON vs.recipe_id = r.id
+                    INNER JOIN user_recipe_data urd ON urd.recipe_id = r.id AND urd.was_extracted = true
+                    WHERE r.is_public = true AND r.is_draft = false
+                    GROUP BY r.id
+                    HAVING COUNT(DISTINCT urd.user_id) >= 1
+                    ORDER BY extraction_count DESC
+                    LIMIT %s OFFSET %s
+                """
+                # Use RPC to execute raw SQL or build with Supabase query builder
+                # Since Supabase Python doesn't support complex joins well, we'll use RPC
+
+                response = self.supabase.rpc(
+                    'get_most_extracted_video_recipes',
+                    {
+                        'limit_param': limit,
+                        'offset_param': offset
+                    }
+                ).execute()
+            else:
+                # Website sources: recipes with source_type='link' that do NOT have video_sources
+                response = self.supabase.rpc(
+                    'get_most_extracted_website_recipes',
+                    {
+                        'limit_param': limit,
+                        'offset_param': offset
+                    }
+                ).execute()
+
+            extracted_recipe_ids = response.data or []
+
+            if not extracted_recipe_ids:
+                return []
+
+            # Fetch full recipe details
+            recipe_ids = [item['recipe_id'] for item in extracted_recipe_ids]
+
+            recipes_response = self.supabase.table(self.table_name)\
+                .select("*")\
+                .in_("id", recipe_ids)\
+                .execute()
+
+            recipes = recipes_response.data or []
+
+            # Merge extraction stats with recipe data
+            recipes_with_stats = []
+            for recipe in recipes:
+                stats = next(
+                    (item for item in extracted_recipe_ids if item['recipe_id'] == recipe['id']),
+                    None
+                )
+                if stats:
+                    recipe['extraction_stats'] = {
+                        'extraction_count': stats['extraction_count'],
+                        'unique_extractors': stats['unique_extractors']
+                    }
+                    recipes_with_stats.append(recipe)
+
+            # Sort by extraction count (maintain order)
+            recipes_with_stats.sort(
+                key=lambda x: x['extraction_stats']['extraction_count'],
+                reverse=True
+            )
+
+            return recipes_with_stats
+        except Exception as e:
+            logger.error(f"Error fetching most extracted recipes: {str(e)}")
+            raise
+
+    async def get_highest_rated_recipes(
+        self,
+        min_rating_count: int = 3,
+        limit: int = 8,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        Get highest rated public recipes.
+
+        Args:
+            min_rating_count: Minimum number of ratings required
+            limit: Maximum number of recipes to return
+            offset: Number of results to skip for pagination
+
+        Returns:
+            List of recipes ordered by average rating (highest first)
+        """
+        try:
+            response = self.supabase.table(self.table_name)\
+                .select("*")\
+                .eq("is_public", True)\
+                .eq("is_draft", False)\
+                .gte("rating_count", min_rating_count)\
+                .order("average_rating", desc=True)\
+                .range(offset, offset + limit - 1)\
+                .execute()
+
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Error fetching highest rated recipes: {str(e)}")
+            raise
+
+    async def get_recent_public_recipes(
+        self,
+        limit: int = 20,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        Get recently added public recipes.
+
+        Args:
+            limit: Maximum number of recipes to return
+            offset: Number of results to skip for pagination
+
+        Returns:
+            List of recipes ordered by creation date (newest first)
+        """
+        try:
+            response = self.supabase.table(self.table_name)\
+                .select("*")\
+                .eq("is_public", True)\
+                .eq("is_draft", False)\
+                .order("created_at", desc=True)\
+                .range(offset, offset + limit - 1)\
+                .execute()
+
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Error fetching recent public recipes: {str(e)}")
+            raise

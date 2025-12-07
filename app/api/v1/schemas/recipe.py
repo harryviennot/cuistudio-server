@@ -218,6 +218,10 @@ class TrendingRecipeResponse(RecipeResponse):
     cooking_stats: CookingStatsResponse
 
 
+# Rebuild to resolve forward reference to UserRecipeDataResponse
+TrendingRecipeResponse.model_rebuild()
+
+
 class UserCookingHistoryItemResponse(BaseModel):
     """User's cooking history for a single cooking event"""
     # Event identification
