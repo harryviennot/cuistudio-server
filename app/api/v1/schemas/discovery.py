@@ -4,7 +4,7 @@ Discovery-related schemas for recipe discovery endpoints.
 from enum import Enum
 from pydantic import BaseModel
 
-from app.api.v1.schemas.recipe import RecipeResponse, UserRecipeDataResponse
+from app.api.v1.schemas.recipe import RecipeResponse, UserRecipeDataResponse  # noqa: F401
 
 
 class SourceCategory(str, Enum):

@@ -89,10 +89,10 @@ def main():
         github_output = os.environ.get("GITHUB_OUTPUT")
         if github_output:
             with open(github_output, "a") as f:
-                f.write(f"has_new=true\n")
+                f.write("has_new=true\n")
                 f.write(f"new_migrations={pending_str}\n")
         else:
-            print(f"has_new=true")
+            print("has_new=true")
             print(f"new_migrations={pending_str}")
     else:
         print("No pending migrations", file=sys.stderr)

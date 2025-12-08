@@ -522,24 +522,7 @@ class RecipeRepository(BaseRepository):
 
             if source_category == "video":
                 # Video sources: recipes that have a video_sources record
-                # Query: recipes joined with video_sources, then count extractions
-                query = """
-                    SELECT
-                        r.id as recipe_id,
-                        COUNT(DISTINCT urd.user_id) as extraction_count,
-                        COUNT(DISTINCT urd.user_id) as unique_extractors
-                    FROM recipes r
-                    INNER JOIN video_sources vs ON vs.recipe_id = r.id
-                    INNER JOIN user_recipe_data urd ON urd.recipe_id = r.id AND urd.was_extracted = true
-                    WHERE r.is_public = true AND r.is_draft = false
-                    GROUP BY r.id
-                    HAVING COUNT(DISTINCT urd.user_id) >= 1
-                    ORDER BY extraction_count DESC
-                    LIMIT %s OFFSET %s
-                """
-                # Use RPC to execute raw SQL or build with Supabase query builder
-                # Since Supabase Python doesn't support complex joins well, we'll use RPC
-
+                # Use RPC to execute the query (Supabase Python doesn't support complex joins well)
                 response = self.supabase.rpc(
                     'get_most_extracted_video_recipes',
                     {

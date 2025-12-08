@@ -1,7 +1,6 @@
 """
 Voice extractor using Whisper API
 """
-import os
 import logging
 from typing import Dict, Any
 from openai import OpenAI

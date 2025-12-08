@@ -1,9 +1,9 @@
 """
 Recipe extraction API schemas
 """
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Dict, Any
-from app.domain.enums import SourceType, ExtractionStatus
+from app.domain.enums import SourceType
 
 
 class ExtractionSubmitRequest(BaseModel):

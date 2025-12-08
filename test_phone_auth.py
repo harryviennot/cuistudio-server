@@ -32,19 +32,19 @@ def test_phone_signup():
             data = response.json()
             print(f"✓ Response: {json.dumps(data, indent=2)}")
             print("\n✓ SUCCESS: OTP should be sent to your phone!")
-            print(f"\nNext step: Use the 6-digit OTP code to verify")
+            print("\nNext step: Use the 6-digit OTP code to verify")
             print(f"  POST {BASE_URL}/auth/verify-phone-otp")
             print(f"  Body: {{\"phone\": \"{PHONE_NUMBER}\", \"token\": \"123456\"}}")
             return True
         elif response.status_code == 409:
-            print(f"⚠ Phone number already registered")
+            print("⚠ Phone number already registered")
             print(f"  Try login instead: POST {BASE_URL}/auth/login-phone")
             return False
         else:
-            print(f"✗ Error Response:")
+            print("✗ Error Response:")
             try:
                 print(json.dumps(response.json(), indent=2))
-            except:
+            except Exception:
                 print(response.text)
             return False
 
@@ -83,10 +83,10 @@ def test_phone_login():
             print("\n✓ SUCCESS: OTP sent for login!")
             return True
         else:
-            print(f"Response:")
+            print("Response:")
             try:
                 print(json.dumps(response.json(), indent=2))
-            except:
+            except Exception:
                 print(response.text)
             return False
 

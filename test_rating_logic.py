@@ -24,7 +24,7 @@ def test_rating_calculations():
     print("\nTest 1: Single 5-star rating")
     dist = {"0.5": 0, "1": 0, "1.5": 0, "2": 0, "2.5": 0, "3": 0, "3.5": 0, "4": 0, "4.5": 0, "5": 1}
     avg, count = calculate_rating_stats(dist)
-    print(f"Distribution: One 5-star")
+    print("Distribution: One 5-star")
     print(f"Average: {avg}, Count: {count}")
     assert avg == 5.0
     assert count == 1
@@ -61,7 +61,7 @@ def test_rating_calculations():
     dist = {"0.5": 1, "1": 1, "1.5": 1, "2": 1, "2.5": 1, "3": 1, "3.5": 1, "4": 1, "4.5": 1, "5": 1}
     avg, count = calculate_rating_stats(dist)
     # Expected: (0.5 + 1 + 1.5 + 2 + 2.5 + 3 + 3.5 + 4 + 4.5 + 5) / 10 = 27.5 / 10 = 2.75
-    print(f"Distribution: One of each rating level")
+    print("Distribution: One of each rating level")
     print(f"Average: {avg}, Count: {count}")
     expected_avg = 2.75
     print(f"Expected: {expected_avg}")

@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends, HTTPException, status, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from supabase import Client, create_client
 import logging
-import asyncio
 
 from app.core.database import get_supabase_client, get_supabase_admin_client
 from app.core.config import get_settings
@@ -330,7 +329,7 @@ async def send_email_otp(
         settings = get_settings()
 
         # sign_in_with_otp creates user if doesn't exist, sends OTP for both cases
-        response = supabase.auth.sign_in_with_otp({
+        supabase.auth.sign_in_with_otp({
             "email": request.email,
             "options": {
                 "should_create_user": True,
@@ -520,7 +519,7 @@ async def authenticate_with_phone(
     """
     try:
         # sign_in_with_otp creates user if doesn't exist, sends OTP for both cases
-        response = supabase.auth.sign_in_with_otp({
+        supabase.auth.sign_in_with_otp({
             "phone": request.phone,
             "options": {
                 "should_create_user": True

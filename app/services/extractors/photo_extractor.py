@@ -2,7 +2,6 @@
 Photo extractor using OCR and GPT-4 Vision
 """
 import asyncio
-import os
 import logging
 from typing import Dict, Any, List, Union
 import pytesseract
@@ -205,8 +204,7 @@ class PhotoExtractor(BaseExtractor):
     def _preprocess_image_for_ocr(self, image: Image.Image) -> Image.Image:
         """Preprocess image to improve OCR accuracy"""
         try:
-            from PIL import ImageEnhance, ImageOps
-            import numpy as np
+            from PIL import ImageEnhance
             from PIL import ImageFilter
 
             # Convert to RGB if necessary

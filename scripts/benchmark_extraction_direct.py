@@ -242,7 +242,7 @@ async def run_benchmark_for_image(
             }
             print(f"    OCR-Only FAILED: {e}")
 
-        print(f"    ✓ Complete")
+        print("    ✓ Complete")
 
     except Exception as e:
         print(f"    ✗ Failed: {e}")

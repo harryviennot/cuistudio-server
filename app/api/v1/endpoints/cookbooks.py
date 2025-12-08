@@ -7,7 +7,7 @@ from typing import List
 import logging
 
 from app.core.database import get_supabase_client
-from app.core.security import get_current_user, get_authenticated_user
+from app.core.security import get_authenticated_user
 from app.repositories.cookbook_repository import CookbookRepository, CookbookFolderRepository
 from app.api.v1.schemas.cookbook import (
     CookbookCreateRequest,
