@@ -126,6 +126,7 @@ class UserRecipeData(BaseModel):
     times_cooked: int = 0
     last_cooked_at: Optional[datetime] = None
     is_favorite: bool = False
+    was_extracted: bool = False  # True if user extracted/imported this recipe
 
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

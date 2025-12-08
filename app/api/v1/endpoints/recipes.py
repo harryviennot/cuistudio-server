@@ -25,8 +25,9 @@ from app.api.v1.schemas.recipe import (
     RecipeListItemResponse,
     UserRecipeDataResponse,
     RecipeContributorResponse,
-    TrendingRecipeResponse,
-    UserCookingHistoryItemResponse,
+    MarkRecipeAseCookedRequest,
+    UpdateCookingEventRequest,
+    CookingEventResponse,
 )
 from app.api.v1.schemas.collection import (
     SaveRecipeRequest,
@@ -96,55 +97,38 @@ async def save_recipe(
     supabase: Client = Depends(get_supabase_admin_client)
 ):
     """
-    Save a recipe to a collection.
+    Save/publish a recipe.
 
     This endpoint is used after the user previews a recipe (from extraction)
     and decides to save it. It handles:
     - Publishing draft recipes (setting is_draft=false)
-    - Adding recipes to user's collection
-    - Handling existing public recipes (add to collection)
+    - Marking recipe as extracted in user_recipe_data
 
     Flow:
     1. Submit extraction via POST /extraction/submit
     2. Poll job status via GET /extraction/jobs/{job_id} until completed
     3. Preview the draft recipe using GET /recipes/{recipe_id}
-    4. Call this endpoint with recipe_id and collection_id to save
+    4. Call this endpoint with recipe_id to publish and save
 
-    If no collection_id is provided, uses the user's default "extracted" collection.
+    Note: collection_id parameter is deprecated and ignored.
+    Recipes are automatically added to the "extracted" virtual collection.
     """
     from app.services.recipe_save_service import RecipeSaveService
-    from app.repositories.collection_repository import CollectionRepository
 
     try:
         save_service = RecipeSaveService(supabase)
 
-        # If no collection_id provided, use the user's "extracted" collection
-        collection_id = save_request.collection_id
-        if not collection_id:
-            collection_repo = CollectionRepository(supabase)
-            extracted_collection = await collection_repo.get_by_slug(
-                current_user["id"],
-                "extracted"
-            )
-            if not extracted_collection:
-                # Create default collections if they don't exist
-                await collection_repo.create_default_collections(current_user["id"])
-                extracted_collection = await collection_repo.get_by_slug(
-                    current_user["id"],
-                    "extracted"
-                )
-            collection_id = extracted_collection["id"]
-
-        result = await save_service.save_recipe_to_collection(
+        # Publish the draft and mark as extracted
+        result = await save_service.publish_draft_recipe(
             user_id=current_user["id"],
             recipe_id=save_request.recipe_id,
-            collection_id=collection_id
+            is_public=save_request.is_public
         )
 
         return SaveRecipeResponse(
             recipe_id=result["recipe_id"],
-            collection_id=result["collection_id"],
-            added_to_collection=result["added_to_collection"],
+            collection_id=None,  # No collection ID in new system
+            added_to_collection=True,  # Always added to virtual "extracted" collection
             was_draft=result.get("was_draft", False)
         )
 
@@ -163,6 +147,98 @@ async def save_recipe(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to save recipe: {str(e)}"
+        )
+
+
+@router.post("/{recipe_id}/favorite", response_model=SaveRecipeResponse)
+async def favorite_recipe(
+    recipe_id: str,
+    current_user: dict = Depends(get_authenticated_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """
+    Add a recipe to the user's favorites.
+
+    This sets is_favorite=true in user_recipe_data for this recipe.
+    The recipe must be public or owned by the user.
+    """
+    from app.repositories.user_recipe_repository import UserRecipeRepository
+    from app.repositories.recipe_repository import RecipeRepository
+
+    try:
+        recipe_repo = RecipeRepository(supabase)
+        user_recipe_repo = UserRecipeRepository(supabase)
+
+        # Verify recipe exists and is accessible
+        recipe = await recipe_repo.get_by_id(recipe_id)
+        if not recipe:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Recipe not found"
+            )
+
+        # Check if user can access this recipe (public or owned)
+        if not recipe["is_public"] and recipe["created_by"] != current_user["id"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have access to this recipe"
+            )
+
+        # Set favorite status
+        await user_recipe_repo.set_favorite(
+            user_id=current_user["id"],
+            recipe_id=recipe_id,
+            is_favorite=True
+        )
+
+        return SaveRecipeResponse(
+            recipe_id=recipe_id,
+            collection_id=None,  # No collection ID in new system
+            added_to_collection=True,
+            was_draft=False
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error favoriting recipe: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to favorite recipe: {str(e)}"
+        )
+
+
+@router.delete("/{recipe_id}/favorite", response_model=MessageResponse)
+async def unfavorite_recipe(
+    recipe_id: str,
+    current_user: dict = Depends(get_authenticated_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """
+    Remove a recipe from the user's favorites.
+
+    This sets is_favorite=false in user_recipe_data for this recipe.
+    This does NOT delete the recipe.
+    """
+    from app.repositories.user_recipe_repository import UserRecipeRepository
+
+    try:
+        user_recipe_repo = UserRecipeRepository(supabase)
+
+        # Set favorite status to false
+        await user_recipe_repo.set_favorite(
+            user_id=current_user["id"],
+            recipe_id=recipe_id,
+            is_favorite=False
+        )
+
+        return MessageResponse(message="Recipe removed from favorites")
+
+    except Exception as e:
+        logger.error(f"Error unfavoriting recipe: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to unfavorite recipe: {str(e)}"
         )
 
 
@@ -291,7 +367,15 @@ async def list_recipes(
         recipes = await repo.get_public_recipes(limit, offset, filters)
 
         user_id = current_user["id"] if current_user else None
-        return [await _format_list_item_response(r, user_id, supabase) for r in recipes]
+
+        # Fetch user data for authenticated users (is_favorite, times_cooked, etc.)
+        user_data_map = {}
+        if user_id:
+            user_repo = UserRecipeRepository(supabase)
+            recipe_ids = [r["id"] for r in recipes]
+            user_data_map = await user_repo.get_user_data_for_recipes(user_id, recipe_ids)
+
+        return [await _format_list_item_response(r, user_id, supabase, user_data_map.get(r["id"])) for r in recipes]
 
     except Exception as e:
         logger.error(f"Error listing recipes: {str(e)}")
@@ -583,13 +667,35 @@ async def update_user_recipe_data(
 @router.post("/{recipe_id}/cooked", response_model=MessageResponse)
 async def mark_recipe_cooked(
     recipe_id: str,
+    request: Optional[MarkRecipeAseCookedRequest] = None,
     current_user: dict = Depends(get_current_user),
     supabase: Client = Depends(get_supabase_admin_client)
 ):
-    """Mark a recipe as cooked (increments cooked count)"""
+    """
+    Mark a recipe as cooked with optional session data.
+
+    Creates a cooking event record with:
+    - rating: Optional rating given at this cooking session (0.5-5.0)
+    - image_url: Optional URL to a photo taken during cooking
+    - duration_minutes: Optional actual cooking time in minutes
+
+    If rating is provided, it also updates the user's current rating for the recipe.
+    """
     try:
         repo = UserRecipeRepository(supabase)
-        await repo.increment_cooked_count(current_user["id"], recipe_id)
+
+        # Extract optional session data
+        rating = request.rating if request else None
+        image_url = request.image_url if request else None
+        duration_minutes = request.duration_minutes if request else None
+
+        await repo.increment_cooked_count(
+            user_id=current_user["id"],
+            recipe_id=recipe_id,
+            rating=rating,
+            image_url=image_url,
+            duration_minutes=duration_minutes
+        )
 
         return MessageResponse(message="Recipe marked as cooked")
 
@@ -598,6 +704,149 @@ async def mark_recipe_cooked(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to mark recipe as cooked: {str(e)}"
+        )
+
+
+@router.patch("/cooking-events/{event_id}", response_model=CookingEventResponse)
+async def update_cooking_event(
+    event_id: str,
+    request: UpdateCookingEventRequest,
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """
+    Update a cooking event.
+
+    Only the owner can update their own events.
+    Can update:
+    - cooked_at: When the cooking happened
+    - rating: Rating given for this session (0.5-5.0)
+    - image_url: Photo from cooking (set to null to remove)
+    """
+    from app.services.upload_service import UploadService
+
+    try:
+        repo = UserRecipeRepository(supabase)
+        upload_service = UploadService(supabase)
+
+        # Check if we need to remove the existing image
+        remove_image = False
+        old_image_url = None
+
+        if request.image_url is None:
+            # Check if this is an explicit null (remove image) vs not provided
+            # We need to check the raw request to distinguish
+            existing = await repo.get_cooking_event(event_id, current_user["id"])
+            if existing and existing.get("image_url"):
+                # User wants to remove the image
+                remove_image = True
+                old_image_url = existing["image_url"]
+
+        # Update the event
+        updated = await repo.update_cooking_event(
+            event_id=event_id,
+            user_id=current_user["id"],
+            cooked_at=request.cooked_at,
+            rating=request.rating,
+            image_url=request.image_url if request.image_url else None,
+            remove_image=remove_image
+        )
+
+        if not updated:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Cooking event not found or you don't have permission to edit it"
+            )
+
+        # If we removed the image, delete it from storage
+        if remove_image and old_image_url:
+            path = UploadService.extract_storage_path(old_image_url, "cooking-events")
+            if path:
+                try:
+                    await upload_service.delete_image(path, bucket="cooking-events")
+                except Exception as e:
+                    logger.warning(f"Failed to delete old cooking image: {str(e)}")
+
+        # Generate signed URL for cooking photo if present
+        cooking_image_url = None
+        if updated.get("image_url"):
+            path = UploadService.extract_storage_path(updated["image_url"], "cooking-events")
+            if path:
+                cooking_image_url = upload_service.create_signed_url(
+                    bucket="cooking-events",
+                    path=path,
+                    expires_in=3600
+                )
+
+        return CookingEventResponse(
+            event_id=updated["id"],
+            recipe_id=updated["recipe_id"],
+            cooked_at=updated["cooked_at"],
+            rating=updated.get("rating"),
+            cooking_image_url=cooking_image_url,
+            duration_minutes=updated.get("duration_minutes")
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating cooking event: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update cooking event: {str(e)}"
+        )
+
+
+@router.delete("/cooking-events/{event_id}", response_model=MessageResponse)
+async def delete_cooking_event(
+    event_id: str,
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """
+    Delete a cooking event.
+
+    Only the owner can delete their own events.
+    Also:
+    - Decrements times_cooked in user_recipe_data
+    - Deletes associated image from storage if exists
+    """
+    from app.services.upload_service import UploadService
+
+    try:
+        repo = UserRecipeRepository(supabase)
+        upload_service = UploadService(supabase)
+
+        # Delete the event (returns the deleted event data)
+        deleted = await repo.delete_cooking_event(
+            event_id=event_id,
+            user_id=current_user["id"]
+        )
+
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Cooking event not found or you don't have permission to delete it"
+            )
+
+        # If there was an image, delete it from storage
+        if deleted.get("image_url"):
+            path = UploadService.extract_storage_path(deleted["image_url"], "cooking-events")
+            if path:
+                try:
+                    await upload_service.delete_image(path, bucket="cooking-events")
+                except Exception as e:
+                    logger.warning(f"Failed to delete cooking image: {str(e)}")
+
+        return MessageResponse(message="Cooking event deleted successfully")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting cooking event: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete cooking event: {str(e)}"
         )
 
 
@@ -866,68 +1115,3 @@ async def update_recipe_rating(
     except Exception as e:
         logger.error(f"Error updating recipe rating: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to update recipe rating")
-
-
-@router.get("/trending", response_model=List[TrendingRecipeResponse])
-async def get_trending_recipes(
-    time_window_days: int = Query(7, ge=1, le=365, description="Number of days to look back (default: 7 for 'this week')"),
-    limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    supabase: Client = Depends(get_supabase_client)
-):
-    """
-    Get trending recipes based on cooking frequency in a time window.
-
-    This endpoint returns recipes ordered by how many times they've been cooked
-    in the specified time window. Great for discovering popular recipes!
-
-    Examples:
-    - time_window_days=7: Most cooked recipes this week
-    - time_window_days=30: Most cooked recipes this month
-    - time_window_days=1: Trending today
-
-    Returns recipes with cooking statistics including:
-    - cook_count: Number of times cooked in the time window
-    - unique_users: Number of unique users who cooked it
-    """
-    try:
-        repo = RecipeRepository(supabase)
-        trending_recipes = await repo.get_trending_recipes(
-            time_window_days=time_window_days,
-            limit=limit,
-            offset=offset
-        )
-        return trending_recipes
-    except Exception as e:
-        logger.error(f"Error fetching trending recipes: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to fetch trending recipes")
-
-
-@router.get("/cooking-history", response_model=List[UserCookingHistoryItemResponse])
-async def get_cooking_history(
-    time_window_days: int = Query(30, ge=1, le=365, description="Number of days to look back (default: 30)"),
-    limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    current_user: dict = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
-):
-    """
-    Get the current user's cooking history in a time window.
-
-    Returns recipes the user has cooked recently with statistics:
-    - times_cooked: How many times they cooked it in the time window
-    - last_cooked_at: When they last cooked it
-    - first_cooked_at: When they first cooked it (in this time window)
-    """
-    try:
-        repo = RecipeRepository(supabase)
-        cooking_history = await repo.get_user_cooking_history(
-            user_id=current_user["id"],
-            time_window_days=time_window_days,
-            limit=limit,
-            offset=offset
-        )
-        return cooking_history
-    except Exception as e:
-        logger.error(f"Error fetching cooking history: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to fetch cooking history")

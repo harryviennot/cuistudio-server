@@ -3,18 +3,17 @@ Recipe Save Service
 Handles the unified save logic for all extraction types.
 This separates the "save" action from the "extract" action.
 """
-import asyncio
 import logging
 from typing import Dict, Any, Optional
 from supabase import Client
 
 from app.domain.enums import SourceType
 from app.repositories.recipe_repository import RecipeRepository
-from app.repositories.collection_repository import CollectionRepository
-from app.repositories.collection_recipe_repository import CollectionRecipeRepository
+from app.repositories.user_recipe_repository import UserRecipeRepository
 from app.repositories.video_source_repository import VideoSourceRepository
 from app.repositories.video_creator_repository import VideoCreatorRepository
 from app.services.video_url_parser import VideoURLParser
+from app.services.thumbnail_cache_service import ThumbnailCacheService
 
 logger = logging.getLogger(__name__)
 
@@ -25,37 +24,39 @@ class RecipeSaveService:
 
     This service handles:
     1. Publishing draft recipes (setting is_draft=false)
-    2. Adding recipes to user's collections
+    2. Marking recipes as extracted in user_recipe_data
     3. Creating video_source and video_creator records for video extractions
-    4. Handling duplicate video saves (add existing to collection)
     """
 
     def __init__(self, supabase: Client):
         self.supabase = supabase
         self.recipe_repo = RecipeRepository(supabase)
-        self.collection_repo = CollectionRepository(supabase)
-        self.collection_recipe_repo = CollectionRecipeRepository(supabase)
+        self.user_recipe_repo = UserRecipeRepository(supabase)
         self.video_source_repo = VideoSourceRepository(supabase)
         self.video_creator_repo = VideoCreatorRepository(supabase)
+        self.thumbnail_cache = ThumbnailCacheService(supabase)
 
-    async def save_recipe_to_collection(
+    async def publish_draft_recipe(
         self,
         user_id: str,
         recipe_id: str,
-        collection_id: str
+        is_public: Optional[bool] = None
     ) -> Dict[str, Any]:
         """
-        Save a recipe to a collection. If recipe is a draft owned by user, publish it.
+        Publish a draft recipe and mark it as extracted.
 
-        This is the main entry point for saving recipes after preview.
+        This is called when the user saves a recipe after previewing.
+        It publishes the draft (is_draft=false) and ensures the user
+        has a user_recipe_data record with was_extracted=true.
 
         Args:
             user_id: User saving the recipe
-            recipe_id: Recipe ID to save
-            collection_id: Collection ID to save to
+            recipe_id: Recipe ID to publish
+            is_public: Whether the recipe should be publicly visible.
+                       If None, defaults to True.
 
         Returns:
-            Dict with recipe_id, collection_id, added_to_collection, was_draft
+            Dict with recipe_id, was_draft, published
         """
         try:
             # Get the recipe
@@ -63,156 +64,71 @@ class RecipeSaveService:
             if not recipe:
                 raise ValueError(f"Recipe not found: {recipe_id}")
 
-            # Verify collection exists and belongs to user
-            collection = await self.collection_repo.get_by_id(collection_id)
-            if not collection:
-                raise ValueError(f"Collection not found: {collection_id}")
-            if collection["user_id"] != user_id:
-                raise PermissionError("You don't own this collection")
-
             # Track if this was a draft
-            was_draft = recipe.get("is_draft", False) and recipe["created_by"] == user_id
+            was_draft = recipe.get("is_draft", False)
 
-            # If recipe is a draft owned by this user, publish it
+            # Only the creator can publish their own draft
+            if was_draft and recipe["created_by"] != user_id:
+                raise PermissionError("You can only publish your own draft recipes")
+
+            # Publish the draft if it is one
             if was_draft:
-                await self.recipe_repo.update(recipe_id, {"is_draft": False})
-                logger.info(f"Published draft recipe {recipe_id}")
+                # Determine final is_public value (default to True if not specified)
+                final_is_public = is_public if is_public is not None else True
+                await self.recipe_repo.update(recipe_id, {
+                    "is_draft": False,
+                    "is_public": final_is_public
+                })
+                logger.info(f"Published draft recipe {recipe_id} (is_public={final_is_public})")
 
-            # Check if user can access this recipe (public or owned by user)
-            if not recipe["is_public"] and recipe["created_by"] != user_id:
-                raise PermissionError("You don't have access to this recipe")
-
-            # Add to collection
-            result = await self.collection_recipe_repo.add_recipe_to_collection(
-                collection_id=collection_id,
-                recipe_id=recipe_id
-            )
+            # Mark as extracted for this user
+            await self.user_recipe_repo.mark_as_extracted(user_id, recipe_id)
 
             return {
                 "recipe_id": recipe_id,
-                "collection_id": collection_id,
-                "added_to_collection": result is not None,
-                "was_draft": was_draft
+                "was_draft": was_draft,
+                "published": was_draft  # True if we actually published something
             }
 
         except Exception as e:
-            logger.error(f"Error saving recipe {recipe_id} to collection: {str(e)}")
+            logger.error(f"Error publishing recipe {recipe_id}: {str(e)}")
             raise
 
-    async def save_from_job(
+    async def mark_recipe_extracted(
         self,
         user_id: str,
-        job_id: str,
-        collection_id: Optional[str] = None
+        recipe_id: str
     ) -> Dict[str, Any]:
         """
-        Save a recipe from an extraction job to a collection.
+        Mark an existing recipe as extracted by this user.
 
-        This is called when the extraction created a draft recipe that the user wants to keep.
-
-        Args:
-            user_id: User saving the recipe
-            job_id: Extraction job ID
-            collection_id: Collection to save to (defaults to 'extracted' collection)
-
-        Returns:
-            Dict with recipe_id, collection_id, added_to_collection
-        """
-        try:
-            # Get extraction job
-            job = self.supabase.table("extraction_jobs")\
-                .select("*")\
-                .eq("id", job_id)\
-                .execute()
-
-            if not job.data:
-                raise ValueError(f"Extraction job not found: {job_id}")
-
-            job_data = job.data[0]
-
-            # Check if job belongs to user
-            if job_data["user_id"] != user_id:
-                raise PermissionError("You don't have permission to save this extraction")
-
-            # Check if job has a recipe_id (draft was created during extraction)
-            if not job_data.get("recipe_id"):
-                raise ValueError("Extraction job has no associated recipe")
-
-            recipe_id = job_data["recipe_id"]
-
-            # If no collection specified, use the user's 'extracted' collection
-            if not collection_id:
-                extracted_collection = await self.collection_repo.get_by_slug(user_id, "extracted")
-                if not extracted_collection:
-                    # Create default collections if they don't exist
-                    await self.collection_repo.create_default_collections(user_id)
-                    extracted_collection = await self.collection_repo.get_by_slug(user_id, "extracted")
-                collection_id = extracted_collection["id"]
-
-            return await self.save_recipe_to_collection(
-                user_id=user_id,
-                recipe_id=recipe_id,
-                collection_id=collection_id
-            )
-
-        except Exception as e:
-            logger.error(f"Error saving recipe from job {job_id}: {str(e)}")
-            raise
-
-    async def add_existing_to_collection(
-        self,
-        user_id: str,
-        recipe_id: str,
-        collection_id: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Add an existing recipe to user's collection.
-
-        Used when:
-        - User extracts a video that was already extracted by someone else
-        - User wants to save a public recipe to their collection
+        Used when a user extracts a duplicate URL - the recipe already exists
+        but we need to mark it in their extracted collection.
 
         Args:
-            user_id: User saving the recipe
+            user_id: User who extracted the recipe
             recipe_id: Existing recipe ID
-            collection_id: Collection to save to (defaults to 'saved' collection)
 
         Returns:
-            Dict with recipe_id, collection_id, added_to_collection
+            Dict with recipe_id and marked status
         """
         try:
-            # Verify recipe exists and is accessible
+            # Verify recipe exists
             recipe = await self.recipe_repo.get_by_id(recipe_id)
             if not recipe:
                 raise ValueError(f"Recipe not found: {recipe_id}")
 
-            # Check if user can access this recipe
-            if not recipe["is_public"] and recipe["created_by"] != user_id:
-                raise PermissionError("You don't have access to this recipe")
-
-            # If no collection specified, use the user's 'saved' collection
-            if not collection_id:
-                saved_collection = await self.collection_repo.get_by_slug(user_id, "saved")
-                if not saved_collection:
-                    # Create default collections if they don't exist
-                    await self.collection_repo.create_default_collections(user_id)
-                    saved_collection = await self.collection_repo.get_by_slug(user_id, "saved")
-                collection_id = saved_collection["id"]
-
-            # Add to collection (will not duplicate if already exists)
-            result = await self.collection_recipe_repo.add_recipe_to_collection(
-                collection_id=collection_id,
-                recipe_id=recipe_id
-            )
+            # Mark as extracted
+            await self.user_recipe_repo.mark_as_extracted(user_id, recipe_id)
+            logger.info(f"Marked recipe {recipe_id} as extracted for user {user_id}")
 
             return {
                 "recipe_id": recipe_id,
-                "collection_id": collection_id,
-                "added_to_collection": result is not None
+                "marked": True
             }
 
         except Exception as e:
-            logger.error(f"Error adding recipe {recipe_id} to collection: {str(e)}")
+            logger.error(f"Error marking recipe as extracted: {str(e)}")
             raise
 
     async def create_draft_recipe(
@@ -229,6 +145,10 @@ class RecipeSaveService:
 
         Draft recipes are not visible to others and are not added to collections.
         The user must explicitly save the recipe to publish it.
+
+        Note: We create a user_recipe_data record with was_extracted=true
+        immediately when creating the draft. This ensures the recipe appears
+        in the user's "Extracted" collection even before they publish it.
 
         Args:
             user_id: User creating the recipe
@@ -296,6 +216,10 @@ class RecipeSaveService:
                 "order": 0
             }).execute()
 
+            # Mark as extracted in user_recipe_data
+            # This ensures it appears in the user's "Extracted" collection
+            await self.user_recipe_repo.mark_as_extracted(user_id, recipe_id)
+
             # Create video-specific records if video metadata present
             # We await this to ensure video_sources table is populated before returning
             # This allows the recipe endpoint to query for video_platform immediately
@@ -305,6 +229,20 @@ class RecipeSaveService:
                     video_metadata=video_metadata,
                     source_url=source_url
                 )
+
+                # Cache video thumbnail to Supabase Storage
+                # This prevents broken images when platforms change thumbnail URLs
+                thumbnail_url = video_metadata.get("thumbnail_url")
+                if thumbnail_url:
+                    cached_url = await self.thumbnail_cache.cache_thumbnail(
+                        thumbnail_url=thumbnail_url,
+                        recipe_id=recipe_id,
+                        user_id=user_id
+                    )
+                    if cached_url:
+                        # Update recipe with our cached thumbnail URL
+                        await self.recipe_repo.update(recipe_id, {"image_url": cached_url})
+                        logger.info(f"Cached video thumbnail for recipe {recipe_id}")
 
             # Update job with recipe_id if provided
             if job_id:

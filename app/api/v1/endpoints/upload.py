@@ -1,14 +1,14 @@
 """
 Image upload endpoints
 """
-from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, UploadFile, HTTPException, status
 from supabase import Client
 from typing import List
 import logging
 
 from app.core.database import get_supabase_admin_client
 from app.core.security import get_current_user
-from app.services.upload_service import UploadService
+from app.services.upload_service import UploadService, ALLOWED_BUCKETS, DEFAULT_STORAGE_BUCKET
 from app.api.v1.schemas.upload import (
     ImageUploadResponse,
     MultipleImageUploadResponse,
@@ -50,6 +50,7 @@ router = APIRouter(prefix="/upload", tags=["Upload"])
 )
 async def upload_image(
     file: UploadFile = File(..., description="Image file to upload (jpg, png, heic, webp)"),
+    bucket: str = Form(DEFAULT_STORAGE_BUCKET, description="Target storage bucket (recipe-images or cooking-events)"),
     current_user: dict = Depends(get_current_user),
     supabase: Client = Depends(get_supabase_admin_client)
 ):
@@ -66,8 +67,11 @@ async def upload_image(
 
     **File Size Limit:** 50MB
 
+    **Storage Buckets:**
+    - `recipe-images` (default): For recipe extraction images
+    - `cooking-events`: For cooking session photos
+
     **Storage Structure:**
-    - Bucket: `recipe-images`
     - Path: `{user_id}/{uuid}.{extension}`
 
     **Authentication:**
@@ -76,6 +80,7 @@ async def upload_image(
 
     **Use Case:**
     - Upload a single recipe image before extraction
+    - Upload a cooking session photo
     - Get public URL to pass to extraction endpoint
 
     **Next Steps:**
@@ -83,10 +88,17 @@ async def upload_image(
     - `POST /extraction/submit` with `file_url` parameter
     - Or use `POST /extraction/submit-images` to upload and extract in one step
     """
+    # Validate bucket is allowed
+    if bucket not in ALLOWED_BUCKETS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid bucket '{bucket}'. Allowed buckets: {', '.join(ALLOWED_BUCKETS)}"
+        )
+
     upload_service = UploadService(supabase)
 
     try:
-        result = await upload_service.upload_image(file, current_user["id"])
+        result = await upload_service.upload_image(file, current_user["id"], bucket=bucket)
         return ImageUploadResponse(**result)
     except HTTPException:
         raise
