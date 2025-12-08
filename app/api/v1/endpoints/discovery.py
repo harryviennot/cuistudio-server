@@ -8,18 +8,20 @@ This module handles all discovery-related endpoints:
 - Recently added public recipes
 - User cooking history
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from supabase import Client
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
 
-from app.core.database import get_supabase_client
-from app.core.security import get_current_user
+from app.core.database import get_supabase_client, get_supabase_user_client
+from app.core.security import get_current_user, get_current_user_optional
 from app.repositories.recipe_repository import RecipeRepository
+from app.repositories.user_recipe_repository import UserRecipeRepository
 from app.domain.models import RecipeTimings, Ingredient, Instruction
 from app.api.v1.schemas.recipe import (
     TrendingRecipeResponse,
     UserCookingHistoryItemResponse,
+    UserRecipeDataResponse,
 )
 from app.api.v1.schemas.discovery import (
     MostExtractedRecipeResponse,
@@ -32,12 +34,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/discovery", tags=["Discovery"])
 
 
-def _transform_recipe_for_response(recipe: Dict[str, Any]) -> Dict[str, Any]:
+def _transform_recipe_for_response(
+    recipe: Dict[str, Any],
+    user_data: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """
     Transform raw database recipe data to match RecipeResponse schema.
 
-    This converts individual timing columns into a timings object and
-    ensures ingredients/instructions are properly formatted.
+    This converts individual timing columns into a timings object,
+    ensures ingredients/instructions are properly formatted,
+    and attaches user-specific data if available.
+
+    Args:
+        recipe: Raw recipe data from database
+        user_data: Optional user-specific data (is_favorite, rating, etc.)
     """
     # Build timings object from individual columns
     if recipe.get("prep_time_minutes") or recipe.get("cook_time_minutes") or recipe.get("total_time_minutes"):
@@ -71,14 +81,54 @@ def _transform_recipe_for_response(recipe: Dict[str, Any]) -> Dict[str, Any]:
     if not recipe.get("contributors"):
         recipe["contributors"] = []
 
+    # Attach user-specific data if available
+    if user_data:
+        recipe["user_data"] = UserRecipeDataResponse(
+            is_favorite=user_data.get("is_favorite", False),
+            rating=user_data.get("rating"),
+            times_cooked=user_data.get("times_cooked", 0),
+            custom_prep_time_minutes=user_data.get("custom_prep_time_minutes"),
+            custom_cook_time_minutes=user_data.get("custom_cook_time_minutes"),
+            custom_difficulty=user_data.get("custom_difficulty"),
+            notes=user_data.get("notes"),
+            custom_servings=user_data.get("custom_servings"),
+            last_cooked_at=user_data.get("last_cooked_at"),
+        )
+    else:
+        recipe["user_data"] = None
+
     return recipe
+
+
+async def _get_user_data_map(
+    user_id: Optional[str],
+    recipe_ids: List[str],
+    request: Request
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Batch fetch user data for a list of recipes.
+
+    Returns a dict mapping recipe_id -> user_data.
+    Returns empty dict if user is not authenticated or no recipes.
+
+    Uses the user's JWT to create a Supabase client that respects RLS policies.
+    """
+    if not user_id or not recipe_ids:
+        return {}
+
+    # Use user client with their JWT so RLS policies work correctly
+    user_client = get_supabase_user_client(request)
+    user_repo = UserRecipeRepository(user_client)
+    return await user_repo.get_user_data_for_recipes(user_id, recipe_ids)
 
 
 @router.get("/trending", response_model=List[TrendingRecipeResponse])
 async def get_trending_recipes(
+    request: Request,
     time_window_days: int = Query(7, ge=1, le=365, description="Number of days to look back (default: 7 for 'this week')"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    current_user: Optional[dict] = Depends(get_current_user_optional),
     supabase: Client = Depends(get_supabase_client)
 ):
     """
@@ -95,6 +145,8 @@ async def get_trending_recipes(
     Returns recipes with cooking statistics including:
     - cook_count: Number of times cooked in the time window
     - unique_users: Number of unique users who cooked it
+
+    If authenticated, also includes user-specific data (is_favorite, rating, etc.)
     """
     try:
         repo = RecipeRepository(supabase)
@@ -103,8 +155,17 @@ async def get_trending_recipes(
             limit=limit,
             offset=offset
         )
+
+        # Batch fetch user data if authenticated
+        user_id = current_user["id"] if current_user else None
+        recipe_ids = [r["id"] for r in trending_recipes]
+        user_data_map = await _get_user_data_map(user_id, recipe_ids, request)
+
         # Transform each recipe to match the response schema
-        return [_transform_recipe_for_response(recipe) for recipe in trending_recipes]
+        return [
+            _transform_recipe_for_response(recipe, user_data_map.get(recipe["id"]))
+            for recipe in trending_recipes
+        ]
     except Exception as e:
         logger.error(f"Error fetching trending recipes: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to fetch trending recipes")
@@ -178,9 +239,11 @@ async def get_cooking_history(
 
 @router.get("/most-extracted", response_model=List[MostExtractedRecipeResponse])
 async def get_most_extracted_recipes(
+    request: Request,
     source_category: SourceCategory = Query(..., description="Filter by source: 'video' for social media, 'website' for recipe sites"),
     limit: int = Query(8, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    current_user: Optional[dict] = Depends(get_current_user_optional),
     supabase: Client = Depends(get_supabase_client)
 ):
     """
@@ -196,6 +259,8 @@ async def get_most_extracted_recipes(
     Returns recipes with extraction statistics including:
     - extraction_count: Number of times this recipe was extracted
     - unique_extractors: Number of unique users who extracted it
+
+    If authenticated, also includes user-specific data (is_favorite, rating, etc.)
     """
     try:
         repo = RecipeRepository(supabase)
@@ -204,8 +269,17 @@ async def get_most_extracted_recipes(
             limit=limit,
             offset=offset
         )
+
+        # Batch fetch user data if authenticated
+        user_id = current_user["id"] if current_user else None
+        recipe_ids = [r["id"] for r in extracted_recipes]
+        user_data_map = await _get_user_data_map(user_id, recipe_ids, request)
+
         # Transform each recipe to match the response schema
-        return [_transform_recipe_for_response(recipe) for recipe in extracted_recipes]
+        return [
+            _transform_recipe_for_response(recipe, user_data_map.get(recipe["id"]))
+            for recipe in extracted_recipes
+        ]
     except Exception as e:
         logger.error(f"Error fetching most extracted recipes: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to fetch most extracted recipes")
@@ -213,9 +287,11 @@ async def get_most_extracted_recipes(
 
 @router.get("/highest-rated", response_model=List[HighestRatedRecipeResponse])
 async def get_highest_rated_recipes(
+    request: Request,
     min_rating_count: int = Query(3, ge=1, le=100, description="Minimum number of ratings required"),
     limit: int = Query(8, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    current_user: Optional[dict] = Depends(get_current_user_optional),
     supabase: Client = Depends(get_supabase_client)
 ):
     """
@@ -227,6 +303,8 @@ async def get_highest_rated_recipes(
     Returns recipes with rating statistics including:
     - average_rating: The recipe's average rating (0.5-5.0)
     - rating_count: Number of ratings received
+
+    If authenticated, also includes user-specific data (is_favorite, rating, etc.)
     """
     try:
         repo = RecipeRepository(supabase)
@@ -235,8 +313,17 @@ async def get_highest_rated_recipes(
             limit=limit,
             offset=offset
         )
+
+        # Batch fetch user data if authenticated
+        user_id = current_user["id"] if current_user else None
+        recipe_ids = [r["id"] for r in rated_recipes]
+        user_data_map = await _get_user_data_map(user_id, recipe_ids, request)
+
         # Transform each recipe to match the response schema
-        return [_transform_recipe_for_response(recipe) for recipe in rated_recipes]
+        return [
+            _transform_recipe_for_response(recipe, user_data_map.get(recipe["id"]))
+            for recipe in rated_recipes
+        ]
     except Exception as e:
         logger.error(f"Error fetching highest rated recipes: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to fetch highest rated recipes")
@@ -244,8 +331,10 @@ async def get_highest_rated_recipes(
 
 @router.get("/recent", response_model=List[RecentRecipeResponse])
 async def get_recent_recipes(
+    request: Request,
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    current_user: Optional[dict] = Depends(get_current_user_optional),
     supabase: Client = Depends(get_supabase_client)
 ):
     """
@@ -253,6 +342,8 @@ async def get_recent_recipes(
 
     Returns public recipes ordered by creation date (newest first).
     Supports infinite pagination for the home page masonry grid.
+
+    If authenticated, also includes user-specific data (is_favorite, rating, etc.)
     """
     try:
         repo = RecipeRepository(supabase)
@@ -260,8 +351,17 @@ async def get_recent_recipes(
             limit=limit,
             offset=offset
         )
+
+        # Batch fetch user data if authenticated
+        user_id = current_user["id"] if current_user else None
+        recipe_ids = [r["id"] for r in recent_recipes]
+        user_data_map = await _get_user_data_map(user_id, recipe_ids, request)
+
         # Transform each recipe to match the response schema
-        return [_transform_recipe_for_response(recipe) for recipe in recent_recipes]
+        return [
+            _transform_recipe_for_response(recipe, user_data_map.get(recipe["id"]))
+            for recipe in recent_recipes
+        ]
     except Exception as e:
         logger.error(f"Error fetching recent recipes: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to fetch recent recipes")
