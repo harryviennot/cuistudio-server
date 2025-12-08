@@ -18,6 +18,7 @@ from app.services.openai_service import OpenAIService
 from app.services.flux_service import FluxService
 from app.services.video_url_parser import VideoURLParser
 from app.services.recipe_save_service import RecipeSaveService
+from app.services.thumbnail_cache_service import ThumbnailCacheService
 from app.repositories.recipe_repository import RecipeRepository
 from app.repositories.video_source_repository import VideoSourceRepository
 from app.core.events import get_event_broadcaster
@@ -35,6 +36,7 @@ class ExtractionService:
         self.recipe_repo = RecipeRepository(supabase)
         self.video_source_repo = VideoSourceRepository(supabase)
         self.recipe_save_service = RecipeSaveService(supabase)
+        self.thumbnail_cache = ThumbnailCacheService(supabase)
 
     async def extract_and_create_recipe(
         self,
@@ -500,6 +502,16 @@ class ExtractionService:
                         recipe_id=existing_recipe_id
                     )
 
+                    # Schedule background thumbnail refresh for video duplicates
+                    # This checks if the platform thumbnail has changed and updates our cache
+                    if is_video_url:
+                        asyncio.create_task(
+                            self._refresh_thumbnail_background(
+                                source_url=source,
+                                recipe_id=existing_recipe_id
+                            )
+                        )
+
                     if job_id:
                         await self._update_job_status(
                             job_id,
@@ -782,6 +794,82 @@ class ExtractionService:
             Dict with recipe_id, is_public, created_by if duplicate found, None otherwise
         """
         return await self.recipe_repo.find_by_source_url(url)
+
+    async def _refresh_thumbnail_background(
+        self,
+        source_url: str,
+        recipe_id: str
+    ) -> None:
+        """
+        Background task to check and refresh video thumbnail if changed.
+
+        Fetches fresh metadata from yt-dlp, compares thumbnail URL with stored one,
+        and updates our cached thumbnail if the platform has a new one.
+
+        This is fire-and-forget - errors are logged but not propagated.
+
+        Args:
+            source_url: Original video URL
+            recipe_id: Recipe ID to update
+        """
+        try:
+            # Get the video_sources record for this recipe
+            video_source = await self.video_source_repo.get_by_recipe(recipe_id)
+            if not video_source:
+                logger.debug(f"No video source found for recipe {recipe_id}, skipping refresh")
+                return
+
+            stored_thumbnail_url = video_source.get("thumbnail_url")
+            if not stored_thumbnail_url:
+                logger.debug(f"No stored thumbnail URL for recipe {recipe_id}, skipping refresh")
+                return
+
+            # Fetch fresh metadata from platform (no video download)
+            fresh_metadata = await self.thumbnail_cache.fetch_fresh_metadata(source_url)
+            if not fresh_metadata:
+                logger.debug(f"Could not fetch fresh metadata for {source_url[:50]}...")
+                return
+
+            fresh_thumbnail_url = fresh_metadata.get("thumbnail")
+            if not fresh_thumbnail_url:
+                logger.debug(f"No thumbnail in fresh metadata for {source_url[:50]}...")
+                return
+
+            # Compare URLs - if different, the creator updated their thumbnail
+            if fresh_thumbnail_url != stored_thumbnail_url:
+                logger.info(f"Thumbnail changed for recipe {recipe_id}, refreshing...")
+
+                # Get recipe to find user_id for storage path
+                recipe = await self.recipe_repo.get_by_id(recipe_id)
+                if not recipe:
+                    logger.warning(f"Recipe {recipe_id} not found, cannot refresh thumbnail")
+                    return
+
+                # Cache new thumbnail to Supabase Storage
+                cached_url = await self.thumbnail_cache.cache_thumbnail(
+                    thumbnail_url=fresh_thumbnail_url,
+                    recipe_id=recipe_id,
+                    user_id=recipe["created_by"]
+                )
+
+                if cached_url:
+                    # Update recipe image_url with new cached URL
+                    await self.recipe_repo.update(recipe_id, {"image_url": cached_url})
+
+                    # Update video_sources.thumbnail_url with new platform URL
+                    # So we can detect future changes
+                    await self.video_source_repo.update(
+                        video_source["id"],
+                        {"thumbnail_url": fresh_thumbnail_url}
+                    )
+
+                    logger.info(f"Successfully refreshed thumbnail for recipe {recipe_id}")
+            else:
+                logger.debug(f"Thumbnail unchanged for recipe {recipe_id}")
+
+        except Exception as e:
+            # Log but don't propagate - this is a background task
+            logger.error(f"Background thumbnail refresh failed for {recipe_id}: {e}", exc_info=True)
 
     def _build_video_metadata(
         self,

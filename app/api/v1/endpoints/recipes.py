@@ -25,8 +25,6 @@ from app.api.v1.schemas.recipe import (
     RecipeListItemResponse,
     UserRecipeDataResponse,
     RecipeContributorResponse,
-    TrendingRecipeResponse,
-    UserCookingHistoryItemResponse,
     MarkRecipeAseCookedRequest,
     UpdateCookingEventRequest,
     CookingEventResponse,
@@ -283,107 +281,6 @@ async def search_recipes_full_text(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to search recipes: {str(e)}"
         )
-
-
-@router.get("/trending", response_model=List[TrendingRecipeResponse])
-async def get_trending_recipes(
-    time_window_days: int = Query(7, ge=1, le=365, description="Number of days to look back (default: 7 for 'this week')"),
-    limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    supabase: Client = Depends(get_supabase_client)
-):
-    """
-    Get trending recipes based on cooking frequency in a time window.
-
-    This endpoint returns recipes ordered by how many times they've been cooked
-    in the specified time window. Great for discovering popular recipes!
-
-    Examples:
-    - time_window_days=7: Most cooked recipes this week
-    - time_window_days=30: Most cooked recipes this month
-    - time_window_days=1: Trending today
-
-    Returns recipes with cooking statistics including:
-    - cook_count: Number of times cooked in the time window
-    - unique_users: Number of unique users who cooked it
-    """
-    try:
-        repo = RecipeRepository(supabase)
-        trending_recipes = await repo.get_trending_recipes(
-            time_window_days=time_window_days,
-            limit=limit,
-            offset=offset
-        )
-        return trending_recipes
-    except Exception as e:
-        logger.error(f"Error fetching trending recipes: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to fetch trending recipes")
-
-
-@router.get("/cooking-history", response_model=List[UserCookingHistoryItemResponse])
-async def get_cooking_history(
-    time_window_days: int = Query(365, ge=1, le=365, description="Number of days to look back (default: 365)"),
-    limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    current_user: dict = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_client)
-):
-    """
-    Get the current user's cooking history as individual cooking events.
-
-    Returns each cooking session with:
-    - event_id: Unique identifier for this cooking event
-    - recipe_id, recipe_title: The recipe that was cooked
-    - recipe_image_url: The recipe's main image
-    - difficulty: Recipe difficulty level
-    - rating: The rating given at this specific cooking session (may differ from current rating)
-    - cooking_image_url: Photo taken during this cooking session (signed URL, expires in 1 hour)
-    - duration_minutes: Actual cooking time for this session
-    - cooked_at: When this cooking session occurred
-    - times_cooked: Total times the user has cooked this recipe
-
-    Note: cooking_image_url is a signed URL that expires after 1 hour for privacy.
-    The mobile app should refresh the cooking history if images fail to load after extended viewing.
-    """
-    from app.services.upload_service import UploadService
-
-    try:
-        repo = RecipeRepository(supabase)
-        upload_service = UploadService(supabase)
-
-        cooking_history = await repo.get_user_cooking_history(
-            user_id=current_user["id"],
-            time_window_days=time_window_days,
-            limit=limit,
-            offset=offset
-        )
-
-        # Generate signed URLs for cooking photos (private bucket)
-        for event in cooking_history:
-            if event.get("cooking_image_url"):
-                stored_url = event["cooking_image_url"]
-                # Extract path from stored URL
-                path = UploadService.extract_storage_path(stored_url, "cooking-events")
-
-                if path:
-                    # Generate fresh signed URL
-                    signed_url = upload_service.create_signed_url(
-                        bucket="cooking-events",
-                        path=path,
-                        expires_in=3600  # 1 hour
-                    )
-                    if signed_url:
-                        event["cooking_image_url"] = signed_url
-                    else:
-                        # If signed URL generation fails, clear the URL
-                        # rather than returning an inaccessible public URL
-                        logger.warning(f"Failed to generate signed URL for cooking photo: {path}")
-                        event["cooking_image_url"] = None
-
-        return cooking_history
-    except Exception as e:
-        logger.error(f"Error fetching cooking history: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to fetch cooking history")
 
 
 @router.get("/{recipe_id}", response_model=RecipeResponse)
