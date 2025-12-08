@@ -121,7 +121,8 @@ async def save_recipe(
         # Publish the draft and mark as extracted
         result = await save_service.publish_draft_recipe(
             user_id=current_user["id"],
-            recipe_id=save_request.recipe_id
+            recipe_id=save_request.recipe_id,
+            is_public=save_request.is_public
         )
 
         return SaveRecipeResponse(

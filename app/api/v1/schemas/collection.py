@@ -28,6 +28,10 @@ class SaveRecipeRequest(BaseModel):
         description="DEPRECATED: Collection ID is ignored. Recipes are automatically in 'extracted'.",
         deprecated=True
     )
+    is_public: Optional[bool] = Field(
+        None,
+        description="Whether the recipe should be publicly visible. If not provided, defaults to True."
+    )
 
 
 # ============= Response Schemas =============

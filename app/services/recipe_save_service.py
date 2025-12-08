@@ -39,7 +39,8 @@ class RecipeSaveService:
     async def publish_draft_recipe(
         self,
         user_id: str,
-        recipe_id: str
+        recipe_id: str,
+        is_public: Optional[bool] = None
     ) -> Dict[str, Any]:
         """
         Publish a draft recipe and mark it as extracted.
@@ -51,6 +52,8 @@ class RecipeSaveService:
         Args:
             user_id: User saving the recipe
             recipe_id: Recipe ID to publish
+            is_public: Whether the recipe should be publicly visible.
+                       If None, defaults to True.
 
         Returns:
             Dict with recipe_id, was_draft, published
@@ -70,8 +73,13 @@ class RecipeSaveService:
 
             # Publish the draft if it is one
             if was_draft:
-                await self.recipe_repo.update(recipe_id, {"is_draft": False})
-                logger.info(f"Published draft recipe {recipe_id}")
+                # Determine final is_public value (default to True if not specified)
+                final_is_public = is_public if is_public is not None else True
+                await self.recipe_repo.update(recipe_id, {
+                    "is_draft": False,
+                    "is_public": final_is_public
+                })
+                logger.info(f"Published draft recipe {recipe_id} (is_public={final_is_public})")
 
             # Mark as extracted for this user
             await self.user_recipe_repo.mark_as_extracted(user_id, recipe_id)
