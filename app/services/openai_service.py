@@ -10,7 +10,6 @@ import httpx
 from openai import AsyncOpenAI
 
 from app.core.config import get_settings
-from app.domain.models import Recipe, Ingredient, Instruction
 
 logger = logging.getLogger(__name__)
 settings = get_settings()

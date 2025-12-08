@@ -7,7 +7,6 @@ import logging
 
 from app.repositories.recipe_repository import RecipeRepository
 from app.repositories.user_recipe_repository import UserRecipeRepository
-from app.core.database import get_supabase_admin_client
 
 logger = logging.getLogger(__name__)
 

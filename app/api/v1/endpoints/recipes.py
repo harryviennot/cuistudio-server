@@ -18,7 +18,6 @@ from app.api.v1.schemas.recipe import (
     RecipeRatingRequest,
     RecipeTimingsUpdateRequest,
     RecipeTimingsUpdateResponse,
-    RecipeRatingUpdateResponse,
     UserRecipeDataUpdate,
     RecipeSearchRequest,
     RecipeResponse,

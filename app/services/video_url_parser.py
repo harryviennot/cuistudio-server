@@ -5,8 +5,8 @@ to extract platform and video ID for duplicate detection.
 """
 
 import re
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
-from typing import Optional, Tuple, Set
+from urllib.parse import urlparse, urlunparse
+from typing import Optional, Set
 from dataclasses import dataclass
 from enum import Enum
 

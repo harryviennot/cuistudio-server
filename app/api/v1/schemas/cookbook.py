@@ -6,7 +6,7 @@ from typing import List, Optional, TYPE_CHECKING, Any
 from datetime import datetime
 
 if TYPE_CHECKING:
-    from app.api.v1.schemas.recipe import RecipeListItemResponse
+    pass
 
 
 # ============= Request Schemas =============

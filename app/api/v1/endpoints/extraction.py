@@ -11,7 +11,7 @@ import asyncio
 import json
 import time
 
-from app.core.database import get_supabase_client, get_supabase_admin_client, get_supabase_user_client
+from app.core.database import get_supabase_admin_client, get_supabase_user_client
 from app.core.security import get_current_user, get_authenticated_user
 from app.core.events import get_event_broadcaster
 from app.services.extraction_service import ExtractionService
@@ -418,8 +418,6 @@ async def benchmark_extraction(
     Remove this endpoint after benchmarking is complete.
     """
     import os
-    from PIL import Image
-    import io
 
     image_path = request.image_path
 

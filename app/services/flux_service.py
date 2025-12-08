@@ -3,7 +3,6 @@ import logging
 import asyncio
 import httpx
 from typing import Dict, Any, Optional
-from uuid import uuid4
 import uuid
 
 logger = logging.getLogger(__name__)

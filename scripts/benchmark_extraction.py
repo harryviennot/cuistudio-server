@@ -17,7 +17,6 @@ Requirements:
 
 import asyncio
 import httpx
-import json
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List
@@ -218,7 +217,7 @@ async def main():
                         summary_stats["ocr_only"]["cost"].append(oo["_extraction_stats"].get("estimated_cost_usd", 0))
                         summary_stats["ocr_only"]["time"].append(oo["_benchmark"].get("extraction_time_seconds", 0))
 
-                print(f"    ✓ Complete")
+                print("    ✓ Complete")
 
             except Exception as e:
                 print(f"    ✗ Failed: {e}")

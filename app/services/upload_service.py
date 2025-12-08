@@ -86,7 +86,7 @@ class UploadService:
             final_size = len(file_content)
 
             # Upload to Supabase Storage
-            response = self.supabase.storage.from_(bucket).upload(
+            self.supabase.storage.from_(bucket).upload(
                 path=storage_path,
                 file=file_content,
                 file_options={

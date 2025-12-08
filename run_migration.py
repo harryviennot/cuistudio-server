@@ -3,7 +3,6 @@
 Direct migration execution script for Supabase
 """
 import os
-import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
 from supabase import create_client
@@ -28,12 +27,12 @@ async def run_migration():
     # Read migration file
     migration_path = Path(__file__).parent / "database" / "migrations" / "009_update_instruction_model.sql"
 
-    print(f"📖 Reading migration file...")
+    print("📖 Reading migration file...")
     with open(migration_path, 'r') as f:
         migration_sql = f.read()
 
     print(f"\n{'='*80}")
-    print(f"🔄 Executing Migration: 009_update_instruction_model.sql")
+    print("🔄 Executing Migration: 009_update_instruction_model.sql")
     print(f"{'='*80}\n")
 
     try:
@@ -46,11 +45,11 @@ async def run_migration():
                 print(f"Executing statement {i}/{len(statements)}...")
                 try:
                     # Use Supabase's RPC to execute raw SQL
-                    result = supabase.rpc('exec_sql', {'query': statement}).execute()
+                    supabase.rpc('exec_sql', {'query': statement}).execute()
                     print(f"  ✅ Statement {i} executed")
-                except Exception as e:
+                except Exception:
                     # If RPC doesn't exist, we need to use PostgREST directly
-                    print(f"  ⚠️  RPC method not available")
+                    print("  ⚠️  RPC method not available")
                     print("\n" + "="*80)
                     print("📋 Please run the migration manually:")
                     print("   1. Go to Supabase Dashboard → SQL Editor")
