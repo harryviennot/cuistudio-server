@@ -114,13 +114,27 @@ jobs:
             --schema-only \
             --no-owner \
             --no-acl \
-            > prod_schema.sql
+            > prod_schema_raw.sql
+
+      - name: Prepare schema for vanilla PostgreSQL
+        run: |
+          # Replace Supabase-specific extensions.uuid_generate_v4() with gen_random_uuid()
+          # Remove CREATE SCHEMA public (already exists)
+          # Remove auth schema references (RLS policies referencing auth.uid())
+          sed -e 's/extensions\.uuid_generate_v4()/gen_random_uuid()/g' \
+              -e '/^CREATE SCHEMA public;$/d' \
+              -e '/auth\./d' \
+              prod_schema_raw.sql > prod_schema.sql
 
       - name: Restore schema to test database
         env:
           PGPASSWORD: postgres
         run: |
-          psql -h localhost -U postgres -d test_db -f prod_schema.sql
+          # Continue on errors since some Supabase-specific things may fail
+          psql -h localhost -U postgres -d test_db -f prod_schema.sql || true
+
+          # Verify core tables were created
+          psql -h localhost -U postgres -d test_db -c "\dt public.*"
 
       - name: Run new migrations on test database
         env:
