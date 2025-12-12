@@ -39,12 +39,17 @@ services:
       - APP_ENV=production
       - REDIS_URL=redis://redis:6379/0
       - SITE_URL=${SITE_URL}
+      - UVICORN_WORKERS=2
+    deploy:
+      resources:
+        limits:
+          memory: 4G
     volumes:
       - tmp-data:/tmp/recipe-app
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
-      interval: 30s
+      interval: 300s
       timeout: 10s
       retries: 3
       start_period: 40s
