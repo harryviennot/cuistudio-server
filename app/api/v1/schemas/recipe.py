@@ -102,6 +102,11 @@ class RecipeResponse(BaseModel):
     title: str
     description: Optional[str] = None
     image_url: Optional[str] = None
+    language: Optional[str] = None  # ISO 639-1 language code of original recipe (e.g., 'en', 'fr')
+
+    # Translation info
+    displayed_language: Optional[str] = None  # Language of content in this response (may differ from 'language' if translated)
+    is_translated: bool = False  # True if content is from a translation, False if original
 
     ingredients: List[Ingredient]
     instructions: List[Instruction]
@@ -160,6 +165,11 @@ class RecipeListItemResponse(BaseModel):
     title: str
     description: Optional[str] = None
     image_url: Optional[str] = None
+    language: Optional[str] = None  # ISO 639-1 language code (e.g., 'en', 'fr')
+
+    # Translation info
+    displayed_language: Optional[str] = None  # Language of content in this response (may differ from 'language' if translated)
+    is_translated: bool = False  # True if content is from a translation, False if original
 
     servings: Optional[int] = None
     difficulty: Optional[DifficultyLevel] = None

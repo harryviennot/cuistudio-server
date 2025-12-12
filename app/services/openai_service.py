@@ -88,26 +88,37 @@ NOT recipes include:
 - Food photos without recipes attached
 
 STEP 2 - IF RECIPE, EXTRACT DATA:
-1. Extract ALL ingredients with quantities and units
-2. Group ingredients logically by recipe sections:
-   - "For the [component]" - e.g., "For the duck", "For the sauce", "For the pasta"
-   - "For the garnish" - garnish/decoration ingredients
-   - "To taste" - salt, pepper, and seasonings added to preference
+1. DETECT the primary language of the recipe content (ISO 639-1 code: en, fr, es, de, it, etc.)
+2. **CRITICAL - KEEP ALL RECIPE CONTENT IN THE ORIGINAL DETECTED LANGUAGE:**
+   - Recipe title must be in the original language (e.g., "Crumble aux pommes" NOT "Apple Crumble")
+   - Description must be in the original language
+   - Ingredient names and notes must be in the original language
+   - **Instruction "title" field must be in the original language** (e.g., "Préparer les pommes" NOT "Prepare the apples")
+   - **Instruction "description" field must be in the original language**
+   - **Instruction "group" field must be in the original language** (e.g., "Montage" NOT "Assembly")
+   - **Ingredient "group" field must be in the original language** (e.g., "Pour le crumble" NOT "For the crumble")
+   - Tags and categories should be in the original language
+   - **NEVER translate ANY text content to English - keep everything in the detected language**
+3. Extract ALL ingredients with quantities and units
+4. Group ingredients logically by recipe sections (in the original language):
+   - French: "Pour le/la [composant]", "Pour la garniture", "Assaisonnement"
+   - English: "For the [component]", "For the garnish", "To taste"
    - Use null if no logical groups exist
-3. Break down instructions into clear, numbered steps with a title and description
-4. Each instruction should have a concise title and detailed description
-5. Group instructions logically by recipe sections:
-   - "For the [component]" - e.g., "For the duck", "For the sauce", "For the pasta"
-   - "Assembly" - final plating/serving steps
-   - "For the garnish" - garnish preparation
-   - Use null if no logical groups exist
-6. Estimate missing timing information based on the recipe
-7. Assign appropriate difficulty level (easy, medium, hard)
-8. Add relevant tags and categories
-9. If servings are not specified, make a reasonable estimate
-10. If prep/cook times are not mentioned, estimate based on the recipe complexity
-11. DETECT the primary language of the recipe (en for English, fr for French)
-12. Return ONLY valid JSON, no markdown formatting
+5. Break down instructions into clear, numbered steps with a title and description
+6. Each instruction should have a concise title and detailed description (BOTH in original language)
+7. Group instructions logically by recipe sections (group names in original language):
+   - French: "Pour le/la [composant]", "Montage", "Pour la garniture"
+   - English: "For the [component]", "Assembly", "For the garnish"
+8. Estimate missing timing information based on the recipe
+9. Assign appropriate difficulty level (easy, medium, hard)
+10. Add relevant tags and categories (in the original language)
+11. If servings are not specified, make a reasonable estimate
+12. If prep/cook times are not mentioned, estimate based on the recipe complexity
+13. Return ONLY valid JSON, no markdown formatting
+
+**CRITICAL REMINDER**: Only JSON keys are in English. ALL text values must be in the detected language.
+- WRONG for French recipe: "title": "Prepare the apples", "group": "Assembly"
+- CORRECT for French recipe: "title": "Préparer les pommes", "group": "Montage"
 
 Response format:
 {
@@ -115,19 +126,19 @@ Response format:
     "rejection_reason": "Brief explanation if not a recipe (null if is_recipe=true)",
 
     // Only include the following fields if is_recipe=true:
-    "title": "Recipe name",
-    "description": "Brief description",
-    "language": "en",
+    "title": "Nom de la recette (in original language)",
+    "description": "Brève description (in original language)",
+    "language": "fr",
     "ingredients": [
-        {"name": "ingredient name", "quantity": 2, "unit": "cups", "notes": "optional notes", "group": "optional group like 'For the sauce'"}
+        {"name": "nom de l'ingrédient", "quantity": 2, "unit": "tasses", "notes": "notes optionnelles", "group": "Pour la sauce"}
     ],
     "instructions": [
-        {"step_number": 1, "title": "Step title", "description": "Detailed instruction text", "timer_minutes": null or number, "group": "optional group like 'For the sauce' or 'Assembly'"}
+        {"step_number": 1, "title": "Titre de l'étape", "description": "Instructions détaillées", "timer_minutes": null or number, "group": "Pour la sauce"}
     ],
     "servings": 4,
     "difficulty": "easy|medium|hard",
     "tags": ["tag1", "tag2"],
-    "categories": ["category1"],
+    "categories": ["catégorie1"],
     "prep_time_minutes": 15,
     "cook_time_minutes": 30,
     "total_time_minutes": 45
@@ -175,6 +186,7 @@ Extract and normalize into JSON format."""
         normalized = {
             "title": data.get("title", "Untitled Recipe"),
             "description": data.get("description"),
+            "language": data.get("language", "en"),  # ISO 639-1 language code
             "ingredients": data.get("ingredients", []),
             "instructions": data.get("instructions", []),
             "servings": data.get("servings"),
@@ -417,12 +429,18 @@ Analyze the image to determine what type of content this is:
 - "food_photo": A photo of prepared food/dish (no recipe text visible)
 - "non_food": Not food-related content (landscapes, people, pets, objects, etc.)
 
-STEP 2 - EXTRACTION BASED ON TYPE:
+STEP 2 - LANGUAGE DETECTION:
+- DETECT the primary language of the recipe content (ISO 639-1 code: en, fr, es, de, it, etc.)
+- For recipe_card: detect from the visible text
+- For food_photo: use English unless context suggests otherwise
+
+STEP 3 - EXTRACTION BASED ON TYPE:
 
 If "recipe_card":
 - Extract the recipe from the visible text, using OCR as reference
 - Compare OCR text against the visual image - the image is the ground truth
 - Fix OCR errors: misread characters, merged words, spacing issues
+- **CRITICAL: KEEP ALL CONTENT IN THE ORIGINAL DETECTED LANGUAGE (do not translate to English)**
 
 If "food_photo":
 - Identify the dish shown in the image
@@ -435,18 +453,20 @@ If "non_food":
 
 EXTRACTION RULES (for recipe_card and food_photo):
 1. Extract COMPLETE ingredients: quantity + unit + name (e.g., "2 cups flour" not "2 cups")
-2. Group ingredients logically based on recipe sections:
-   - "For the [main dish]" - main ingredients (e.g., "For the soup", "For the duck")
-   - "For the [sauce/topping]" - sauce or topping ingredients (e.g., "For the sauce", "For the glaze")
-   - "For the garnish" - garnish/decoration ingredients
-   - "To taste" - salt, pepper, and seasonings added to preference
+2. Group ingredients logically based on recipe sections (in the original language):
+   - French: "Pour le/la [composant]", "Pour la garniture", "Assaisonnement"
+   - English: "For the [component]", "For the garnish", "To taste"
    - If no logical groups exist, use null for the group field
 3. Number all instruction steps sequentially
-4. Each instruction should have a concise title and detailed description
-5. Group instructions logically based on recipe sections
+4. **Each instruction "title" AND "description" must be in the original detected language**
+5. **Each instruction "group" must be in the original language** (e.g., "Montage" NOT "Assembly" for French)
 6. ESTIMATE cooking time for EACH step based on the action
 7. If servings not visible, estimate based on ingredient quantities
 8. Return ONLY valid JSON, no markdown formatting
+
+**CRITICAL REMINDER**: Only JSON keys are in English. ALL text values must be in the detected language.
+- WRONG for French recipe: "title": "Prepare the apples", "group": "Assembly"
+- CORRECT for French recipe: "title": "Préparer les pommes", "group": "Montage"
 
 Response format:
 {
@@ -455,20 +475,21 @@ Response format:
     "is_ai_generated": false or true,
     "identified_dish": "Dish name (for food_photo only)",
     "rejection_reason": "Brief explanation (if non_food)",
+    "language": "fr",
 
     // Only include these if is_recipe=true:
-    "title": "Recipe name",
-    "description": "Brief description of the dish",
+    "title": "Nom de la recette (in original language)",
+    "description": "Brève description (in original language)",
     "ingredients": [
-        {"name": "ingredient name", "quantity": 2.0, "unit": "cups", "notes": "optional prep notes", "group": "For the soup"}
+        {"name": "nom de l'ingrédient", "quantity": 2.0, "unit": "tasses", "notes": "notes optionnelles", "group": "Pour la soupe"}
     ],
     "instructions": [
-        {"step_number": 1, "title": "Step title", "description": "Detailed instruction text", "timer_minutes": 5, "group": "For the soup"}
+        {"step_number": 1, "title": "Titre de l'étape", "description": "Instructions détaillées", "timer_minutes": 5, "group": "Pour la soupe"}
     ],
     "servings": 4,
     "difficulty": "easy|medium|hard",
     "tags": ["tag1", "tag2"],
-    "categories": ["category1"],
+    "categories": ["catégorie1"],
     "prep_time_minutes": 15,
     "cook_time_minutes": 30,
     "total_time_minutes": 45
@@ -596,13 +617,19 @@ Analyze all images together to determine what type of content this is:
 - "food_photo": Photos of prepared food/dishes (no recipe text visible)
 - "non_food": Not food-related content (landscapes, people, pets, objects, etc.)
 
-STEP 2 - EXTRACTION BASED ON TYPE:
+STEP 2 - LANGUAGE DETECTION:
+- DETECT the primary language of the recipe content (ISO 639-1 code: en, fr, es, de, it, etc.)
+- For recipe_card: detect from the visible text
+- For food_photo: use English unless context suggests otherwise
+
+STEP 3 - EXTRACTION BASED ON TYPE:
 
 If "recipe_card":
 - Extract the recipe from the visible text across all images
 - Combine ingredients and instructions from all images into one coherent recipe
 - Use OCR texts as reference but validate against the images (images are ground truth)
 - Fix OCR errors: misread characters, merged words, spacing issues
+- **CRITICAL: KEEP ALL CONTENT IN THE ORIGINAL DETECTED LANGUAGE (do not translate to English)**
 
 If "food_photo":
 - Identify the dish(es) shown in the images
@@ -615,12 +642,18 @@ If "non_food":
 
 EXTRACTION RULES (for recipe_card and food_photo):
 1. Extract COMPLETE ingredients: quantity + unit + name
-2. Group ingredients logically based on recipe sections
+2. Group ingredients logically based on recipe sections (in the original language):
+   - French: "Pour le/la [composant]", "Pour la garniture", "Assaisonnement"
+   - English: "For the [component]", "For the garnish", "To taste"
 3. Number all instruction steps sequentially
-4. Each instruction should have a concise title and detailed description
-5. Group instructions logically based on recipe sections
+4. **Each instruction "title" AND "description" must be in the original detected language**
+5. **Each instruction "group" must be in the original language** (e.g., "Montage" NOT "Assembly" for French)
 6. ESTIMATE cooking time for EACH step based on the action
 7. Return ONLY valid JSON, no markdown formatting
+
+**CRITICAL REMINDER**: Only JSON keys are in English. ALL text values must be in the detected language.
+- WRONG for French recipe: "title": "Prepare the apples", "group": "Assembly"
+- CORRECT for French recipe: "title": "Préparer les pommes", "group": "Montage"
 
 Response format:
 {
@@ -629,20 +662,21 @@ Response format:
     "is_ai_generated": false or true,
     "identified_dish": "Dish name (for food_photo only)",
     "rejection_reason": "Brief explanation (if non_food)",
+    "language": "fr",
 
     // Only include these if is_recipe=true:
-    "title": "Recipe name",
-    "description": "Brief description",
+    "title": "Nom de la recette (in original language)",
+    "description": "Brève description (in original language)",
     "ingredients": [
-        {"name": "ingredient name", "quantity": 2.0, "unit": "cups", "notes": "optional", "group": "For the soup"}
+        {"name": "nom de l'ingrédient", "quantity": 2.0, "unit": "tasses", "notes": "notes optionnelles", "group": "Pour la soupe"}
     ],
     "instructions": [
-        {"step_number": 1, "title": "Step title", "description": "Detailed instruction text", "timer_minutes": 5, "group": "For the soup"}
+        {"step_number": 1, "title": "Titre de l'étape", "description": "Instructions détaillées", "timer_minutes": 5, "group": "Pour la soupe"}
     ],
     "servings": 4,
     "difficulty": "easy|medium|hard",
     "tags": ["tag1", "tag2"],
-    "categories": ["category1"],
+    "categories": ["catégorie1"],
     "prep_time_minutes": 15,
     "cook_time_minutes": 30,
     "total_time_minutes": 45
@@ -775,50 +809,57 @@ Analyze the OCR text to determine what type of content this is:
 - "recipe_card": Recipe text with ingredients and/or instructions
 - "non_food": Not food-related content
 
-STEP 2 - EXTRACTION:
+STEP 2 - LANGUAGE DETECTION:
+- DETECT the primary language of the recipe content (ISO 639-1 code: en, fr, es, de, it, etc.)
+
+STEP 3 - EXTRACTION:
 
 If "recipe_card":
 - Extract the recipe from the OCR text
 - Fix common OCR errors: misread characters (0/O, 1/l/I), merged words, spacing issues
 - Structure into proper recipe format
+- **CRITICAL: KEEP ALL CONTENT IN THE ORIGINAL DETECTED LANGUAGE (do not translate to English)**
 
 If "non_food":
 - Return is_recipe: false with a rejection reason
 
 EXTRACTION RULES (for recipe_card):
 1. Extract COMPLETE ingredients: quantity + unit + name (e.g., "2 cups flour" not "2 cups")
-2. Group ingredients logically based on recipe sections:
-   - "For the [main dish]" - main ingredients (e.g., "For the soup", "For the duck")
-   - "For the [sauce/topping]" - sauce or topping ingredients
-   - "For the garnish" - garnish/decoration ingredients
-   - "To taste" - salt, pepper, and seasonings added to preference
+2. Group ingredients logically based on recipe sections (in the original language):
+   - French: "Pour le/la [composant]", "Pour la garniture", "Assaisonnement"
+   - English: "For the [component]", "For the garnish", "To taste"
    - If no logical groups exist, use null for the group field
 3. Number all instruction steps sequentially
-4. Each instruction should have a concise title and detailed description
-5. Group instructions logically based on recipe sections
+4. **Each instruction "title" AND "description" must be in the original detected language**
+5. **Each instruction "group" must be in the original language** (e.g., "Montage" NOT "Assembly" for French)
 6. ESTIMATE cooking time for EACH step based on the action
 7. If servings not visible, estimate based on ingredient quantities
 8. Return ONLY valid JSON, no markdown formatting
+
+**CRITICAL REMINDER**: Only JSON keys are in English. ALL text values must be in the detected language.
+- WRONG for French recipe: "title": "Prepare the apples", "group": "Assembly"
+- CORRECT for French recipe: "title": "Préparer les pommes", "group": "Montage"
 
 Response format:
 {
     "content_type": "recipe_card" | "non_food",
     "is_recipe": true or false,
     "rejection_reason": "Brief explanation (if non_food)",
+    "language": "fr",
 
     // Only include these if is_recipe=true:
-    "title": "Recipe name",
-    "description": "Brief description of the dish",
+    "title": "Nom de la recette (in original language)",
+    "description": "Brève description (in original language)",
     "ingredients": [
-        {"name": "ingredient name", "quantity": 2.0, "unit": "cups", "notes": "optional prep notes", "group": "For the soup"}
+        {"name": "nom de l'ingrédient", "quantity": 2.0, "unit": "tasses", "notes": "notes optionnelles", "group": "Pour la soupe"}
     ],
     "instructions": [
-        {"step_number": 1, "title": "Step title", "description": "Detailed instruction text", "timer_minutes": 5, "group": "For the soup"}
+        {"step_number": 1, "title": "Titre de l'étape", "description": "Instructions détaillées", "timer_minutes": 5, "group": "Pour la soupe"}
     ],
     "servings": 4,
     "difficulty": "easy|medium|hard",
     "tags": ["tag1", "tag2"],
-    "categories": ["category1"],
+    "categories": ["catégorie1"],
     "prep_time_minutes": 15,
     "cook_time_minutes": 30,
     "total_time_minutes": 45

@@ -186,6 +186,7 @@ class RecipeSaveService:
             recipe_data = {
                 "title": extracted_data["title"],
                 "description": extracted_data.get("description"),
+                "language": extracted_data.get("language", "en"),  # ISO 639-1 language code
                 "ingredients": extracted_data.get("ingredients", []),
                 "instructions": extracted_data.get("instructions", []),
                 "servings": extracted_data.get("servings"),

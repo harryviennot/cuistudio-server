@@ -93,7 +93,9 @@ async def submit_extraction(
             current_user["id"],
             extraction_request.source_type,
             source,
-            job_id
+            job_id,
+            None,  # progress_callback
+            extraction_request.user_locale  # user's preferred locale for translation
         )
 
         # Get and return job status
@@ -115,6 +117,7 @@ async def submit_extraction(
 async def submit_image_extraction(
     request: Request,
     files: List[UploadFile] = File(..., description=f"Recipe images (max {MAX_IMAGES_PER_EXTRACTION})"),
+    user_locale: str = None,
     background_tasks: BackgroundTasks = None,
     current_user: dict = Depends(get_authenticated_user),
     user_client: Client = Depends(get_supabase_user_client),
@@ -163,7 +166,9 @@ async def submit_image_extraction(
             current_user["id"],
             SourceType.PHOTO,
             image_urls,  # Pass list of URLs
-            job_id
+            job_id,
+            None,  # progress_callback
+            user_locale  # user's preferred locale for translation
         )
 
         return ImageExtractionResponse(

@@ -14,6 +14,12 @@ class ExtractionSubmitRequest(BaseModel):
     text_content: Optional[str] = None  # For paste/voice transcription
     file_url: Optional[str] = None  # DEPRECATED: Use file_urls for single or multiple images
     file_urls: Optional[List[str]] = Field(None, max_length=5, description="List of uploaded file URLs (max 5)")
+    user_locale: Optional[str] = Field(
+        None,
+        min_length=2,
+        max_length=5,
+        description="User's preferred locale for translated response (ISO 639-1, e.g., 'en', 'fr')"
+    )
 
     @field_validator('source_urls', 'file_urls')
     @classmethod
@@ -22,6 +28,14 @@ class ExtractionSubmitRequest(BaseModel):
             raise ValueError("URL list cannot be empty if provided")
         if v is not None and len(v) > 5:
             raise ValueError("Cannot provide more than 5 URLs")
+        return v
+
+    @field_validator('user_locale')
+    @classmethod
+    def validate_user_locale(cls, v):
+        if v is not None:
+            # Normalize to lowercase
+            return v.lower()
         return v
 
 

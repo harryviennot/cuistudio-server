@@ -19,6 +19,7 @@ from app.services.flux_service import FluxService
 from app.services.video_url_parser import VideoURLParser
 from app.services.recipe_save_service import RecipeSaveService
 from app.services.thumbnail_cache_service import ThumbnailCacheService
+from app.services.translation_service import TranslationService
 from app.repositories.recipe_repository import RecipeRepository
 from app.repositories.video_source_repository import VideoSourceRepository
 from app.core.events import get_event_broadcaster
@@ -37,6 +38,7 @@ class ExtractionService:
         self.video_source_repo = VideoSourceRepository(supabase)
         self.recipe_save_service = RecipeSaveService(supabase)
         self.thumbnail_cache = ThumbnailCacheService(supabase)
+        self.translation_service = TranslationService(supabase)
 
     async def extract_and_create_recipe(
         self,
@@ -174,6 +176,7 @@ class ExtractionService:
             recipe_data = {
                 "title": normalized_data["title"],
                 "description": normalized_data.get("description"),
+                "language": normalized_data.get("language", "en"),  # ISO 639-1 language code
                 "ingredients": normalized_data.get("ingredients", []),
                 "instructions": normalized_data.get("instructions", []),
                 "servings": normalized_data.get("servings"),
@@ -436,7 +439,8 @@ class ExtractionService:
         source_type: SourceType,
         source: Union[str, List[str]],
         job_id: Optional[str] = None,
-        progress_callback: Optional[Callable[[int, str], None]] = None
+        progress_callback: Optional[Callable[[int, str], None]] = None,
+        user_locale: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Extract recipe from source(s) and create a DRAFT recipe.
@@ -453,6 +457,7 @@ class ExtractionService:
             source: Source URL/content or list of URLs
             job_id: Optional extraction job ID for tracking
             progress_callback: Optional callback for progress updates
+            user_locale: Optional user's preferred locale for translation (ISO 639-1)
 
         Returns:
             Dict with job_id, status, recipe_id (always set - draft or existing)
@@ -511,6 +516,28 @@ class ExtractionService:
                                 recipe_id=existing_recipe_id
                             )
                         )
+
+                    # Handle translation for duplicate recipes if user_locale differs
+                    if user_locale:
+                        existing_recipe = await self.recipe_repo.get_by_id(existing_recipe_id)
+                        if existing_recipe:
+                            recipe_language = existing_recipe.get("language", "en")
+                            if recipe_language != user_locale:
+                                if job_id:
+                                    await self._update_job_status(
+                                        job_id,
+                                        ExtractionStatus.PROCESSING,
+                                        50,
+                                        f"Translating to {user_locale}"
+                                    )
+                                try:
+                                    await self.translation_service.get_or_create_translation(
+                                        recipe_id=existing_recipe_id,
+                                        target_language=user_locale
+                                    )
+                                    logger.info(f"Created/retrieved translation for duplicate recipe {existing_recipe_id} in {user_locale}")
+                                except Exception as e:
+                                    logger.warning(f"Failed to translate duplicate recipe {existing_recipe_id}: {str(e)}")
 
                     if job_id:
                         await self._update_job_status(
@@ -640,6 +667,7 @@ class ExtractionService:
             extraction_data = {
                 "title": normalized_data["title"],
                 "description": normalized_data.get("description"),
+                "language": normalized_data.get("language", "en"),  # ISO 639-1 language code
                 "ingredients": normalized_data.get("ingredients", []),
                 "instructions": normalized_data.get("instructions", []),
                 "servings": normalized_data.get("servings"),
@@ -701,6 +729,28 @@ class ExtractionService:
             )
 
             recipe_id = result["recipe_id"]
+            recipe_language = extraction_data.get("language", "en")
+
+            # Step 6: Handle translation if user_locale differs from recipe language
+            if user_locale and user_locale != recipe_language:
+                if job_id:
+                    await self._update_job_status(
+                        job_id,
+                        ExtractionStatus.PROCESSING,
+                        95,
+                        f"Translating to {user_locale}"
+                    )
+
+                try:
+                    # Get or create translation (will be cached)
+                    await self.translation_service.get_or_create_translation(
+                        recipe_id=recipe_id,
+                        target_language=user_locale
+                    )
+                    logger.info(f"Created translation for recipe {recipe_id} from {recipe_language} to {user_locale}")
+                except Exception as e:
+                    # Translation failure shouldn't fail the extraction
+                    logger.warning(f"Failed to translate recipe {recipe_id} to {user_locale}: {str(e)}")
 
             # Update job status to completed
             if job_id:

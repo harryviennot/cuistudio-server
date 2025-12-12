@@ -6,11 +6,13 @@ from supabase import Client
 from typing import List, Optional, Dict, Any
 import logging
 
-from app.core.database import get_supabase_client, get_supabase_admin_client
+from app.core.database import get_supabase_client, get_supabase_admin_client, get_supabase_user_client
 from app.core.security import get_current_user, get_current_user_optional, get_authenticated_user
 from app.repositories.recipe_repository import RecipeRepository
 from app.repositories.user_recipe_repository import UserRecipeRepository
 from app.services.openai_service import OpenAIService
+from app.services.translation_service import TranslationService
+from app.repositories.translation_repository import TranslationRepository
 from app.api.v1.schemas.recipe import (
     RecipeCreateRequest,
     RecipeUpdateRequest,
@@ -287,12 +289,19 @@ async def search_recipes_full_text(
 async def get_recipe(
     recipe_id: str,
     request: Request,
+    language: Optional[str] = Query(None, min_length=2, max_length=5, description="Target language for translation (ISO 639-1)"),
     current_user: Optional[dict] = Depends(get_current_user_optional),
     supabase: Client = Depends(get_supabase_client)
 ):
-    """Get a recipe by ID"""
+    """
+    Get a recipe by ID, optionally translated to specified language.
+
+    If language is provided and differs from the recipe's original language,
+    the recipe content will be returned in the requested language (translated).
+    """
     try:
         from app.core.database import get_supabase_user_client
+        from app.services.translation_service import TranslationService
 
         repo = RecipeRepository(supabase)
         recipe = await repo.get_with_contributors(recipe_id)
@@ -326,6 +335,16 @@ async def get_recipe(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="This recipe is private"
                     )
+
+        # Handle translation if requested
+        if language:
+            language = language.lower()
+            translation_service = TranslationService(supabase)
+            recipe = await translation_service.get_recipe_in_language(recipe, language)
+            # Debug: Log translation result
+            logger.info(f"[DEBUG] Recipe after translation: is_translated={recipe.get('is_translated')}, displayed_language={recipe.get('displayed_language')}")
+            logger.info(f"[DEBUG] Ingredients count: {len(recipe.get('ingredients', []))}, first: {recipe.get('ingredients', [{}])[0].get('name', 'N/A') if recipe.get('ingredients') else 'EMPTY'}")
+            logger.info(f"[DEBUG] Instructions count: {len(recipe.get('instructions', []))}, first title: {recipe.get('instructions', [{}])[0].get('title', 'N/A') if recipe.get('instructions') else 'EMPTY'}")
 
         # Use user client with JWT token for RLS-aware operations
         user_client = get_supabase_user_client(request) if current_user else supabase
@@ -477,6 +496,18 @@ async def update_recipe(
             data["is_public"] = update_data.is_public
 
         updated_recipe = await repo.update(recipe_id, data)
+
+        # Invalidate cached translations when recipe content changes
+        # This ensures translations stay in sync with the original recipe
+        content_fields = {"title", "description", "ingredients", "instructions"}
+        if data.keys() & content_fields:
+            try:
+                translation_service = TranslationService(supabase)
+                await translation_service.invalidate_translations(recipe_id)
+                logger.info(f"Invalidated translations for recipe {recipe_id} after content update")
+            except Exception as e:
+                # Log but don't fail the update if translation invalidation fails
+                logger.warning(f"Failed to invalidate translations for recipe {recipe_id}: {str(e)}")
 
         return await _format_recipe_response(updated_recipe, current_user["id"], supabase)
 
@@ -937,6 +968,9 @@ async def _format_recipe_response(
         title=recipe["title"],
         description=recipe.get("description"),
         image_url=recipe.get("image_url"),
+        language=recipe.get("language"),
+        displayed_language=recipe.get("displayed_language"),
+        is_translated=recipe.get("is_translated", False),
         ingredients=[Ingredient(**ing) for ing in recipe.get("ingredients", [])],
         instructions=[Instruction(**inst) for inst in recipe.get("instructions", [])],
         servings=recipe.get("servings"),
@@ -1012,6 +1046,9 @@ async def _format_list_item_response(
         title=recipe["title"],
         description=recipe.get("description"),
         image_url=recipe.get("image_url"),
+        language=recipe.get("language"),
+        displayed_language=recipe.get("displayed_language"),
+        is_translated=recipe.get("is_translated", False),
         servings=recipe.get("servings"),
         difficulty=recipe.get("difficulty"),
         tags=recipe.get("tags", []),
@@ -1114,3 +1151,225 @@ async def update_recipe_rating(
     except Exception as e:
         logger.error(f"Error updating recipe rating: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to update recipe rating")
+
+
+# =============================================================================
+# Translation Endpoints
+# =============================================================================
+
+@router.post("/{recipe_id}/translate", response_model=RecipeResponse)
+async def translate_recipe(
+    recipe_id: str,
+    request: Request,
+    target_language: str = Query(..., min_length=2, max_length=5, description="Target language (ISO 639-1 code)"),
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+    supabase: Client = Depends(get_supabase_client)
+):
+    """
+    Translate a recipe to a target language.
+
+    This endpoint triggers translation of a recipe to the specified language.
+    If a cached translation exists, it returns immediately.
+    Otherwise, it generates a new translation using AI and caches it.
+
+    Args:
+        recipe_id: The recipe to translate
+        target_language: ISO 639-1 language code (e.g., 'en', 'fr', 'es', 'it', 'de')
+
+    Returns:
+        Recipe with content in target language
+    """
+    try:
+        repo = RecipeRepository(supabase)
+        # Use user client with JWT for RLS-aware operations (auth.uid() is set)
+        user_client = get_supabase_user_client(request)
+        translation_service = TranslationService(user_client)
+
+        # Get the recipe
+        recipe = await repo.get_by_id(recipe_id)
+        if not recipe:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Recipe not found"
+            )
+
+        # Check access permissions
+        user_id = current_user["id"] if current_user else None
+        if not recipe["is_public"] and recipe["created_by"] != user_id:
+            # Check if user has share access
+            if user_id:
+                share_check = supabase.table("recipe_shares")\
+                    .select("permission_level")\
+                    .eq("recipe_id", recipe_id)\
+                    .eq("shared_with_user_id", user_id)\
+                    .execute()
+                if not share_check.data:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="You don't have access to this recipe"
+                    )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You don't have access to this recipe"
+                )
+
+        # Get recipe in target language (creates translation if needed)
+        translated_recipe = await translation_service.get_recipe_in_language(
+            recipe=recipe,
+            target_language=target_language,
+            create_if_missing=True  # Explicit translate action, OK to create
+        )
+
+        return await _format_recipe_response(translated_recipe, user_id, supabase)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error translating recipe {recipe_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to translate recipe: {str(e)}"
+        )
+
+
+@router.get("/{recipe_id}/languages")
+async def get_recipe_languages(
+    recipe_id: str,
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+    supabase: Client = Depends(get_supabase_client)
+) -> Dict[str, Any]:
+    """
+    Get available languages for a recipe.
+
+    Returns the original language and all cached translation languages.
+
+    Args:
+        recipe_id: The recipe ID
+
+    Returns:
+        Dict with:
+        - original: Original recipe language (ISO 639-1)
+        - translations: List of available translation languages
+        - available: Combined list of all available languages
+    """
+    try:
+        repo = RecipeRepository(supabase)
+        translation_repo = TranslationRepository(supabase)
+
+        # Get the recipe
+        recipe = await repo.get_by_id(recipe_id)
+        if not recipe:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Recipe not found"
+            )
+
+        # Check access permissions
+        user_id = current_user["id"] if current_user else None
+        if not recipe["is_public"] and recipe["created_by"] != user_id:
+            if user_id:
+                share_check = supabase.table("recipe_shares")\
+                    .select("permission_level")\
+                    .eq("recipe_id", recipe_id)\
+                    .eq("shared_with_user_id", user_id)\
+                    .execute()
+                if not share_check.data:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="You don't have access to this recipe"
+                    )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You don't have access to this recipe"
+                )
+
+        # Get original language
+        original_language = recipe.get("language", "en")
+
+        # Get available translation languages
+        translation_languages = await translation_repo.get_available_languages(recipe_id)
+
+        # Combine all available languages (original + translations)
+        all_languages = list(set([original_language] + translation_languages))
+
+        return {
+            "original": original_language,
+            "translations": translation_languages,
+            "available": sorted(all_languages)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting languages for recipe {recipe_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get recipe languages: {str(e)}"
+        )
+
+
+@router.delete("/{recipe_id}/translations", response_model=MessageResponse)
+async def delete_recipe_translations(
+    recipe_id: str,
+    language: Optional[str] = Query(None, min_length=2, max_length=5, description="Specific language to delete (optional)"),
+    current_user: dict = Depends(get_authenticated_user),
+    supabase: Client = Depends(get_supabase_client)
+):
+    """
+    Delete cached translations for a recipe.
+
+    Only the recipe owner can delete translations.
+    If language is specified, only that translation is deleted.
+    Otherwise, all translations are deleted.
+
+    Args:
+        recipe_id: The recipe ID
+        language: Optional specific language to delete
+
+    Returns:
+        Success message
+    """
+    try:
+        repo = RecipeRepository(supabase)
+        translation_repo = TranslationRepository(supabase)
+
+        # Get the recipe
+        recipe = await repo.get_by_id(recipe_id)
+        if not recipe:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Recipe not found"
+            )
+
+        # Only owner can delete translations
+        if recipe["created_by"] != current_user["id"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the recipe owner can delete translations"
+            )
+
+        if language:
+            # Delete specific translation
+            deleted = await translation_repo.delete_translation(recipe_id, language)
+            if deleted:
+                return MessageResponse(message=f"Translation to '{language}' deleted successfully")
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"No translation found for language '{language}'"
+                )
+        else:
+            # Delete all translations
+            count = await translation_repo.delete_translations(recipe_id)
+            return MessageResponse(message=f"Deleted {count} translation(s) successfully")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting translations for recipe {recipe_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete translations: {str(e)}"
+        )
