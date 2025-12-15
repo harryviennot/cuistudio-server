@@ -24,6 +24,7 @@ from moviepy.video.io.VideoFileClip import VideoFileClip
 
 from app.services.extractors.base_extractor import BaseExtractor
 from app.core.config import get_settings
+from app.domain.extraction_steps import ExtractionStep
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -102,20 +103,20 @@ class VideoExtractor(BaseExtractor):
             Dict containing transcript, description, video metadata, and thumbnail URL
         """
         try:
-            self.update_progress(5, "Downloading video")
+            self.update_progress(5, ExtractionStep.VIDEO_DOWNLOADING)
             video_path, video_metadata = await self._download_video(source)
             self._track_temp_file(video_path)
 
             description = video_metadata.get("description", "")
 
-            self.update_progress(30, "Extracting audio")
+            self.update_progress(30, ExtractionStep.VIDEO_EXTRACTING_AUDIO)
             audio_path = await self._extract_audio(video_path)
             self._track_temp_file(audio_path)
 
-            self.update_progress(50, "Transcribing audio")
+            self.update_progress(50, ExtractionStep.VIDEO_TRANSCRIBING)
             transcript = await self._transcribe_audio(audio_path)
 
-            self.update_progress(90, "Combining extracted content")
+            self.update_progress(90, ExtractionStep.VIDEO_COMBINING)
 
             # Combine transcript and description (no OCR text)
             combined_text = f"""Video Description: {description}
@@ -123,7 +124,7 @@ class VideoExtractor(BaseExtractor):
 Transcript:
 {transcript}"""
 
-            self.update_progress(100, "Extraction complete")
+            self.update_progress(100, ExtractionStep.COMPLETE)
 
             return {
                 "text": combined_text.strip(),

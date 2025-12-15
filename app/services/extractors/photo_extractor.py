@@ -18,6 +18,7 @@ import io
 
 from app.services.extractors.base_extractor import BaseExtractor
 from app.services.gemini_service import GeminiService
+from app.domain.extraction_steps import ExtractionStep
 
 logger = logging.getLogger(__name__)
 
@@ -69,17 +70,17 @@ class PhotoExtractor(BaseExtractor):
 
     async def _extract_single_image(self, source: str) -> Dict[str, Any]:
         """Extract recipe from a single image using OCR-only."""
-        self.update_progress(20, "Extracting text from image (OCR)")
+        self.update_progress(20, ExtractionStep.PHOTO_OCR_SINGLE)
         ocr_text = await self._run_ocr(source)
 
         if not ocr_text.strip():
             logger.warning("OCR returned empty text")
 
-        self.update_progress(50, "Extracting recipe from OCR text")
+        self.update_progress(50, ExtractionStep.PHOTO_EXTRACTING)
         # Use Gemini to extract structured recipe from OCR text only (no image)
         recipe_data = await self.gemini_service.extract_recipe_from_ocr(ocr_text, image_count=1)
 
-        self.update_progress(100, "Extraction complete")
+        self.update_progress(100, ExtractionStep.COMPLETE)
 
         # Add source URL to the recipe data so it can be used as image_url
         recipe_data["source_url"] = source
@@ -92,14 +93,14 @@ class PhotoExtractor(BaseExtractor):
         image_count = len(sources)
 
         # Step 1: Run OCR on all images in parallel for speed
-        self.update_progress(10, f"Extracting text from {image_count} images (OCR)")
+        self.update_progress(10, ExtractionStep.PHOTO_OCR_MULTIPLE)
 
         # Create OCR tasks for parallel execution
         ocr_tasks = [self._run_ocr(source) for source in sources]
         all_ocr_texts = await asyncio.gather(*ocr_tasks)
 
         # Update progress after OCR
-        self.update_progress(50, f"Extracted text from {image_count} images")
+        self.update_progress(50, ExtractionStep.PHOTO_OCR_MULTIPLE)
 
         # Step 2: Combine OCR texts and extract recipe
         combined_ocr = "\n\n--- Image Separator ---\n\n".join(
@@ -110,10 +111,10 @@ class PhotoExtractor(BaseExtractor):
             logger.warning("All OCR results were empty")
             combined_ocr = "(No text could be extracted from the images)"
 
-        self.update_progress(60, f"Extracting recipe from combined OCR text")
+        self.update_progress(60, ExtractionStep.PHOTO_EXTRACTING)
         recipe_data = await self.gemini_service.extract_recipe_from_ocr(combined_ocr, image_count=image_count)
 
-        self.update_progress(100, "Multi-image extraction complete")
+        self.update_progress(100, ExtractionStep.COMPLETE)
 
         # Add source URLs to the recipe data
         recipe_data["source_url"] = sources[0]  # First image for backward compatibility

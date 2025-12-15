@@ -11,6 +11,7 @@ from supabase import Client
 
 from app.domain.enums import SourceType, ExtractionStatus
 from app.domain.exceptions import NotARecipeError, WebsiteBlockedError
+from app.domain.extraction_steps import ExtractionStep
 from app.services.extractors.video_extractor import VideoExtractor
 from app.services.extractors.photo_extractor import PhotoExtractor
 from app.services.extractors.voice_extractor import VoiceExtractor
@@ -68,7 +69,7 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.PROCESSING,
                     0,
-                    "Starting extraction"
+                    ExtractionStep.STARTING
                 )
 
             # Create progress callback that updates database if job_id is provided
@@ -103,11 +104,11 @@ class ExtractionService:
                         job_id,
                         ExtractionStatus.PROCESSING,
                         55,
-                        "Recipe data extracted"
+                        ExtractionStep.NORMALIZING
                     )
                 elif progress_callback:
                     # Only use progress_callback if no job_id (backward compatibility)
-                    progress_callback(55, "Recipe data extracted")
+                    progress_callback(55, ExtractionStep.NORMALIZING)
             else:
                 # Other extractors return raw text that needs normalization
                 if job_id:
@@ -115,11 +116,11 @@ class ExtractionService:
                         job_id,
                         ExtractionStatus.PROCESSING,
                         55,
-                        "Normalizing recipe data"
+                        ExtractionStep.NORMALIZING
                     )
                 elif progress_callback:
                     # Only use progress_callback if no job_id (backward compatibility)
-                    progress_callback(55, "Normalizing recipe data")
+                    progress_callback(55, ExtractionStep.NORMALIZING)
 
                 normalized_data = await self.gemini_service.normalize_recipe(
                     raw_content["text"],
@@ -132,11 +133,11 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.PROCESSING,
                     70,
-                    "Preparing recipe data"
+                    ExtractionStep.PREPARING
                 )
             elif progress_callback:
                 # Only use progress_callback if no job_id (backward compatibility)
-                progress_callback(70, "Preparing recipe data")
+                progress_callback(70, ExtractionStep.PREPARING)
 
             # Get source URLs (could be single or multiple)
             # For backwards compatibility with non-photo sources
@@ -155,10 +156,10 @@ class ExtractionService:
                         job_id,
                         ExtractionStatus.PROCESSING,
                         75,
-                        "Generating AI image"
+                        ExtractionStep.GENERATING_IMAGE
                     )
                 elif progress_callback:
-                    progress_callback(75, "Generating AI image")
+                    progress_callback(75, ExtractionStep.GENERATING_IMAGE)
 
                 # Generate image synchronously (recipe_id will be auto-generated)
                 generated_image_url = await self.flux_service.generate_recipe_image(
@@ -218,12 +219,12 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.COMPLETED,
                     100,
-                    "Extraction complete",
+                    ExtractionStep.COMPLETE,
                     recipe_id=recipe["id"]
                 )
             elif progress_callback:
                 # Only use progress_callback if no job_id (backward compatibility)
-                progress_callback(100, "Recipe created successfully")
+                progress_callback(100, ExtractionStep.COMPLETE)
 
             logger.info(f"Successfully created recipe {recipe['id']} from {source_type.value}")
 
@@ -238,7 +239,7 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.FAILED,
                     0,
-                    "Extraction failed",
+                    ExtractionStep.STARTING,
                     error_message=str(e)
                 )
 
@@ -265,17 +266,20 @@ class ExtractionService:
         job_id: str,
         status: ExtractionStatus,
         progress: int,
-        step: str,
+        step: Union[ExtractionStep, str],
         recipe_id: Optional[str] = None,
         error_message: Optional[str] = None,
         existing_recipe_id: Optional[str] = None
     ):
         """Update extraction job status"""
         try:
+            # Convert ExtractionStep enum to string value if needed
+            step_value = step.value if isinstance(step, ExtractionStep) else step
+
             update_data = {
                 "status": status.value,
                 "progress_percentage": progress,
-                "current_step": step
+                "current_step": step_value
             }
 
             if recipe_id:
@@ -302,7 +306,7 @@ class ExtractionService:
                     "id": job_id,
                     "status": status.value,
                     "progress_percentage": progress,
-                    "current_step": step
+                    "current_step": step_value
                 }
                 if recipe_id:
                     event_data["recipe_id"] = recipe_id
@@ -466,7 +470,7 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.PROCESSING,
                     0,
-                    "Starting extraction"
+                    ExtractionStep.STARTING
                 )
 
             # Check for duplicates based on source type
@@ -519,7 +523,7 @@ class ExtractionService:
                             job_id,
                             ExtractionStatus.COMPLETED,
                             100,
-                            "Recipe already exists",
+                            ExtractionStep.COMPLETE,
                             existing_recipe_id=existing_recipe_id
                         )
 
@@ -569,7 +573,7 @@ class ExtractionService:
                         job_id,
                         ExtractionStatus.PROCESSING,
                         55,
-                        "Recipe data extracted"
+                        ExtractionStep.NORMALIZING
                     )
             else:
                 # Check if job was cancelled before normalization
@@ -588,7 +592,7 @@ class ExtractionService:
                         job_id,
                         ExtractionStatus.PROCESSING,
                         55,
-                        "Normalizing recipe data"
+                        ExtractionStep.NORMALIZING
                     )
                 normalized_data = await self.gemini_service.normalize_recipe(
                     raw_content["text"],
@@ -601,7 +605,7 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.PROCESSING,
                     70,
-                    "Preparing recipe data"
+                    ExtractionStep.PREPARING
                 )
 
             # Get source URLs
@@ -628,7 +632,7 @@ class ExtractionService:
                         job_id,
                         ExtractionStatus.PROCESSING,
                         75,
-                        "Generating AI image"
+                        ExtractionStep.GENERATING_IMAGE
                     )
 
                 generated_image_url = await self.flux_service.generate_recipe_image(
@@ -690,7 +694,7 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.PROCESSING,
                     90,
-                    "Creating draft recipe"
+                    ExtractionStep.SAVING
                 )
 
             result = await self.recipe_save_service.create_draft_recipe(
@@ -710,7 +714,7 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.COMPLETED,
                     100,
-                    "Extraction complete",
+                    ExtractionStep.COMPLETE,
                     recipe_id=recipe_id
                 )
 
@@ -729,7 +733,7 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.NOT_A_RECIPE,
                     100,
-                    "Content analysis complete",
+                    ExtractionStep.COMPLETE,
                     error_message=e.message
                 )
             return {
@@ -745,7 +749,7 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.WEBSITE_BLOCKED,
                     100,
-                    "Website blocks automated extraction",
+                    ExtractionStep.COMPLETE,
                     error_message=e.message
                 )
             return {
@@ -761,7 +765,7 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.FAILED,
                     0,
-                    "Extraction failed",
+                    ExtractionStep.STARTING,
                     error_message=str(e)
                 )
             raise
