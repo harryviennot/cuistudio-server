@@ -1,6 +1,7 @@
 """
 Gemini service for AI-powered recipe extraction and normalization.
 Uses Gemini 2.5 Flash Lite for fast, cost-effective recipe processing.
+Falls back to GPT-4o-mini if Gemini refuses due to copyright detection.
 """
 import asyncio
 import json
@@ -9,6 +10,7 @@ import re
 from typing import Dict, Any, Optional
 
 import google.generativeai as genai
+from openai import OpenAI
 
 from app.core.config import get_settings
 from app.domain.exceptions import NotARecipeError
@@ -17,18 +19,29 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+class GeminiRecitationError(Exception):
+    """Raised when Gemini refuses to process content due to copyright/recitation detection."""
+    pass
+
+
 class GeminiService:
     """Service for Google Gemini API interactions for recipe extraction."""
 
     # Model configuration
     # gemini-2.5-flash-lite is fastest based on benchmarks
-    # Use preview version which is more widely available
     MODEL_NAME = "gemini-2.5-flash-lite"
+    OPENAI_MODEL = "gpt-4o-mini"  # Fallback model
 
     # Pricing per 1M tokens (as of Dec 2024)
     PRICING = {
-        "input": 0.075,   # $0.075 per 1M input tokens
-        "output": 0.30,   # $0.30 per 1M output tokens
+        "gemini": {
+            "input": 0.075,   # $0.075 per 1M input tokens
+            "output": 0.30,   # $0.30 per 1M output tokens
+        },
+        "openai": {
+            "input": 0.15,    # $0.15 per 1M input tokens
+            "output": 0.60,   # $0.60 per 1M output tokens
+        }
     }
 
     def __init__(self):
@@ -42,9 +55,13 @@ class GeminiService:
 
         genai.configure(api_key=api_key)
         self._genai = genai
-        logger.info(f"GeminiService initialized with model: {self.MODEL_NAME}")
 
-    def _get_generation_config(self, temperature: float = 0.3, max_tokens: int = 2000):
+        # Initialize OpenAI client for fallback
+        self._openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
+        logger.info(f"GeminiService initialized with model: {self.MODEL_NAME} (fallback: {self.OPENAI_MODEL})")
+
+    def _get_generation_config(self, temperature: float = 0.3, max_tokens: int = 4000):
         """Get generation config for Gemini API calls."""
         return self._genai.GenerationConfig(
             temperature=temperature,
@@ -52,11 +69,20 @@ class GeminiService:
             response_mime_type="application/json"
         )
 
-    def _calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
+    def _calculate_cost(self, input_tokens: int, output_tokens: int, provider: str = "gemini") -> float:
         """Calculate estimated cost based on token usage."""
+        pricing = self.PRICING.get(provider, self.PRICING["gemini"])
         return (
-            (input_tokens / 1_000_000) * self.PRICING["input"] +
-            (output_tokens / 1_000_000) * self.PRICING["output"]
+            (input_tokens / 1_000_000) * pricing["input"] +
+            (output_tokens / 1_000_000) * pricing["output"]
+        )
+
+    def _is_recitation_error(self, error: Exception) -> bool:
+        """Check if error is due to Gemini's copyright/recitation detection."""
+        error_str = str(error).lower()
+        return (
+            "reciting from copyrighted material" in error_str or
+            "finish_reason" in error_str and "4" in error_str
         )
 
     def _parse_servings(self, value: Any) -> Optional[int]:
@@ -121,6 +147,145 @@ class GeminiService:
         if normalized["instructions"]:
             for i, instruction in enumerate(normalized["instructions"]):
                 instruction["step_number"] = i + 1
+
+        return normalized
+
+    async def _normalize_recipe_openai(
+        self,
+        raw_content: str,
+        source_type: str,
+        system_prompt: str,
+        existing_data: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Fallback: Normalize recipe using GPT-4o-mini when Gemini refuses.
+        Uses the same prompts as the Gemini version for consistency.
+        """
+        logger.info("Using OpenAI GPT-4o-mini fallback for recipe normalization")
+
+        user_prompt = f"""Parse this recipe from {source_type}:
+
+{raw_content}
+
+{f'Existing data to merge: {json.dumps(existing_data)}' if existing_data else ''}
+
+Extract and normalize into JSON format. Remember to preserve the original language."""
+
+        response = await asyncio.to_thread(
+            self._openai_client.chat.completions.create,
+            model=self.OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.3
+        )
+
+        result = json.loads(response.choices[0].message.content)
+
+        # Check if content is a recipe
+        if not result.get("is_recipe", True):
+            rejection_reason = result.get("rejection_reason", "Content does not appear to be a recipe")
+            logger.info(f"Content not a recipe (OpenAI fallback): {rejection_reason}")
+            raise NotARecipeError(message=rejection_reason)
+
+        # Validate and structure the response
+        normalized = self._validate_and_structure(result)
+
+        # Calculate token usage from OpenAI response
+        input_tokens = response.usage.prompt_tokens
+        output_tokens = response.usage.completion_tokens
+
+        # Add usage statistics
+        normalized["_extraction_stats"] = {
+            "model": self.OPENAI_MODEL,
+            "provider": "openai",
+            "method": "normalize",
+            "source_type": source_type,
+            "fallback": True,
+            "fallback_reason": "gemini_recitation_block",
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+            "estimated_cost_usd": self._calculate_cost(input_tokens, output_tokens, "openai")
+        }
+
+        logger.info(f"Successfully normalized recipe (OpenAI fallback): {normalized.get('title', 'Unknown')}")
+        logger.info(f"Token usage: {input_tokens + output_tokens} tokens, ~${normalized['_extraction_stats']['estimated_cost_usd']:.4f}")
+
+        return normalized
+
+    async def _extract_recipe_from_ocr_openai(
+        self,
+        ocr_text: str,
+        system_prompt: str,
+        image_count: int = 1
+    ) -> Dict[str, Any]:
+        """
+        Fallback: Extract recipe from OCR using GPT-4o-mini when Gemini refuses.
+        Uses the same prompts as the Gemini version for consistency.
+        """
+        logger.info("Using OpenAI GPT-4o-mini fallback for OCR recipe extraction")
+
+        image_context = f"from {image_count} image(s)" if image_count > 1 else ""
+        user_prompt = f"""Extract a recipe from this OCR text {image_context} (may contain OCR errors that need fixing):
+
+---OCR TEXT---
+{ocr_text}
+---END OCR---
+
+Task:
+1. First, classify if this is recipe content or not
+2. If recipe: Extract and structure the recipe, fixing any OCR errors
+3. If not recipe: Return is_recipe: false with rejection reason
+4. Return structured JSON following the specified format
+5. IMPORTANT: Preserve the original language - do not translate"""
+
+        response = await asyncio.to_thread(
+            self._openai_client.chat.completions.create,
+            model=self.OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.3
+        )
+
+        result = json.loads(response.choices[0].message.content)
+
+        # Check if content is a recipe
+        if not result.get("is_recipe", True):
+            rejection_reason = result.get("rejection_reason", "Text does not contain a recipe")
+            content_type = result.get("content_type", "unknown")
+            logger.info(f"OCR text not a recipe (OpenAI fallback, type: {content_type}): {rejection_reason}")
+            raise NotARecipeError(message=rejection_reason)
+
+        # Validate and structure the response
+        normalized = self._validate_and_structure(result)
+
+        # Calculate token usage from OpenAI response
+        input_tokens = response.usage.prompt_tokens
+        output_tokens = response.usage.completion_tokens
+
+        # Add usage statistics
+        normalized["_extraction_stats"] = {
+            "model": self.OPENAI_MODEL,
+            "provider": "openai",
+            "method": "ocr_extraction",
+            "content_type": result.get("content_type", "recipe_card"),
+            "image_count": image_count,
+            "fallback": True,
+            "fallback_reason": "gemini_recitation_block",
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+            "estimated_cost_usd": self._calculate_cost(input_tokens, output_tokens, "openai")
+        }
+
+        logger.info(f"Successfully extracted recipe from OCR (OpenAI fallback): {normalized.get('title', 'Unknown')}")
+        logger.info(f"Token usage: {input_tokens + output_tokens} tokens, ~${normalized['_extraction_stats']['estimated_cost_usd']:.4f}")
 
         return normalized
 
@@ -273,6 +438,12 @@ Extract and normalize into JSON format. Remember to preserve the original langua
         except NotARecipeError:
             raise
         except Exception as e:
+            # Check if this is a recitation/copyright error - use OpenAI fallback
+            if self._is_recitation_error(e):
+                logger.warning(f"Gemini blocked due to copyright detection, falling back to OpenAI: {str(e)}")
+                return await self._normalize_recipe_openai(
+                    raw_content, source_type, system_prompt, existing_data
+                )
             logger.error(f"Error normalizing recipe with Gemini: {str(e)}")
             raise
 
@@ -429,5 +600,11 @@ Task:
         except NotARecipeError:
             raise
         except Exception as e:
+            # Check if this is a recitation/copyright error - use OpenAI fallback
+            if self._is_recitation_error(e):
+                logger.warning(f"Gemini blocked due to copyright detection, falling back to OpenAI: {str(e)}")
+                return await self._extract_recipe_from_ocr_openai(
+                    ocr_text, system_prompt, image_count
+                )
             logger.error(f"Error extracting recipe from OCR with Gemini: {str(e)}")
             raise
