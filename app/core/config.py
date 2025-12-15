@@ -2,7 +2,7 @@
 Application configuration management
 """
 from functools import lru_cache
-from typing import List
+from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,10 +14,13 @@ class Settings(BaseSettings):
     SUPABASE_PUBLISHABLE_KEY: str
     SUPABASE_SECRET_KEY: str
 
-    # OpenAI
+    # OpenAI (kept for Whisper transcription)
     OPENAI_API_KEY: str
     OPENAI_ORGANIZATION_ID: str
     OPENAI_PROJECT_ID: str
+
+    # Google Gemini (for recipe extraction)
+    GOOGLE_API_KEY: Optional[str] = None
 
     # Application
     APP_ENV: str = "development"

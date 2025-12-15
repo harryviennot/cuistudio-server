@@ -1,6 +1,8 @@
 """
 Extraction orchestrator service
 Coordinates extraction from different sources and normalization
+
+Uses Gemini 2.5 Flash Lite for fast, cost-effective recipe normalization.
 """
 import asyncio
 import logging
@@ -14,7 +16,7 @@ from app.services.extractors.photo_extractor import PhotoExtractor
 from app.services.extractors.voice_extractor import VoiceExtractor
 from app.services.extractors.paste_extractor import PasteExtractor
 from app.services.extractors.link_extractor import LinkExtractor
-from app.services.openai_service import OpenAIService
+from app.services.gemini_service import GeminiService
 from app.services.flux_service import FluxService
 from app.services.video_url_parser import VideoURLParser
 from app.services.recipe_save_service import RecipeSaveService
@@ -31,7 +33,7 @@ class ExtractionService:
 
     def __init__(self, supabase: Client):
         self.supabase = supabase
-        self.openai_service = OpenAIService()
+        self.gemini_service = GeminiService()
         self.flux_service = FluxService(supabase)
         self.recipe_repo = RecipeRepository(supabase)
         self.video_source_repo = VideoSourceRepository(supabase)
@@ -119,7 +121,7 @@ class ExtractionService:
                     # Only use progress_callback if no job_id (backward compatibility)
                     progress_callback(55, "Normalizing recipe data")
 
-                normalized_data = await self.openai_service.normalize_recipe(
+                normalized_data = await self.gemini_service.normalize_recipe(
                     raw_content["text"],
                     source_type.value
                 )
@@ -588,7 +590,7 @@ class ExtractionService:
                         55,
                         "Normalizing recipe data"
                     )
-                normalized_data = await self.openai_service.normalize_recipe(
+                normalized_data = await self.gemini_service.normalize_recipe(
                     raw_content["text"],
                     source_type.value
                 )
