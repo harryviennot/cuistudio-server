@@ -5,6 +5,7 @@ Uses Gemini 2.5 Flash Lite for fast, cost-effective recipe processing.
 import asyncio
 import json
 import logging
+import re
 from typing import Dict, Any, Optional
 
 import google.generativeai as genai
@@ -58,6 +59,35 @@ class GeminiService:
             (output_tokens / 1_000_000) * self.PRICING["output"]
         )
 
+    def _parse_servings(self, value: Any) -> Optional[int]:
+        """Parse servings value to integer, handling ranges like '4 - 6'."""
+        if value is None:
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            # Handle ranges like "4 - 6" or "4-6" by taking the first number
+            match = re.search(r'\d+', value)
+            if match:
+                return int(match.group())
+        return None
+
+    def _parse_time_minutes(self, value: Any) -> Optional[int]:
+        """Parse time value to integer."""
+        if value is None:
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            match = re.search(r'\d+', value)
+            if match:
+                return int(match.group())
+        return None
+
     def _validate_and_structure(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Validate and ensure all required fields are present."""
         normalized = {
@@ -66,13 +96,13 @@ class GeminiService:
             "language": data.get("language", "en"),
             "ingredients": data.get("ingredients", []),
             "instructions": data.get("instructions", []),
-            "servings": data.get("servings"),
+            "servings": self._parse_servings(data.get("servings")),
             "difficulty": data.get("difficulty"),
             "tags": data.get("tags", []),
             "categories": data.get("categories", []),
-            "prep_time_minutes": data.get("prep_time_minutes"),
-            "cook_time_minutes": data.get("cook_time_minutes"),
-            "total_time_minutes": data.get("total_time_minutes"),
+            "prep_time_minutes": self._parse_time_minutes(data.get("prep_time_minutes")),
+            "cook_time_minutes": self._parse_time_minutes(data.get("cook_time_minutes")),
+            "total_time_minutes": self._parse_time_minutes(data.get("total_time_minutes")),
         }
 
         # Clean up ingredients: remove whitespace-only units and quantities
