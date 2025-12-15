@@ -54,6 +54,20 @@ class VideoExtractor(BaseExtractor):
         # Track temp files for cleanup
         self._temp_files: List[Path] = []
 
+    def _get_best_thumbnail(self, info: dict) -> str | None:
+        """Get the best thumbnail URL, preferring creator-selected cover."""
+        thumbnails = info.get("thumbnails", [])
+
+        # Build lookup by id
+        thumb_by_id = {t.get("id"): t.get("url") for t in thumbnails}
+
+        # Prefer 'cover' (creator-selected), fallback to 'originCover', then default
+        return (
+            thumb_by_id.get("cover")
+            or thumb_by_id.get("originCover")
+            or info.get("thumbnail")
+        )
+
     def _track_temp_file(self, path: str) -> str:
         """Track a temp file for cleanup after extraction."""
         self._temp_files.append(Path(path))
@@ -176,7 +190,7 @@ Transcript:
 
                     # URLs
                     "webpage_url": info.get("webpage_url"),
-                    "thumbnail": info.get("thumbnail"),
+                    "thumbnail": self._get_best_thumbnail(info),
 
                     # Video stats
                     "duration": info.get("duration"),
