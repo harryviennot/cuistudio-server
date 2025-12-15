@@ -311,6 +311,7 @@ async def stream_extraction_job(
                     "progress_percentage": job.get("progress_percentage", 0),
                     "current_step": job.get("current_step", ""),
                     "recipe_id": job.get("recipe_id"),
+                    "existing_recipe_id": job.get("existing_recipe_id"),
                     "error_message": job.get("error_message")
                 }
                 yield {
