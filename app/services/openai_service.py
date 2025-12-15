@@ -20,7 +20,7 @@ class OpenAIService:
 
     def __init__(self):
         self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY, organization=settings.OPENAI_ORGANIZATION_ID, project=settings.OPENAI_PROJECT_ID)
-        self.model = "gpt-4o"  # Using GPT-4
+        self.model = "gpt-4o-mini"  # Using GPT-4o-mini for cost efficiency
 
     async def _download_image_as_base64(self, image_url: str) -> str:
         """
@@ -163,7 +163,20 @@ Extract and normalize into JSON format."""
             # Validate and structure the response
             normalized = self._validate_and_structure(result)
 
+            # Add usage statistics for benchmarking
+            usage = response.usage
+            normalized["_extraction_stats"] = {
+                "model": self.model,
+                "method": "normalize",
+                "source_type": source_type,
+                "prompt_tokens": usage.prompt_tokens,
+                "completion_tokens": usage.completion_tokens,
+                "total_tokens": usage.total_tokens,
+                "estimated_cost_usd": self._calculate_cost_text_only(usage, self.model)
+            }
+
             logger.info(f"Successfully normalized recipe: {normalized.get('title', 'Unknown')}")
+            logger.info(f"Token usage: {usage.total_tokens} tokens, ~${normalized['_extraction_stats']['estimated_cost_usd']:.4f}")
             return normalized
 
         except Exception as e:
@@ -880,6 +893,24 @@ Task:
         except Exception as e:
             logger.error(f"Error extracting recipe from OCR text only: {str(e)}")
             raise
+
+    async def extract_recipe_from_image_only(
+        self,
+        image_url: str
+    ) -> Dict[str, Any]:
+        """
+        Extract structured recipe from image only (no OCR preprocessing).
+        Used for benchmarking to compare against OCR-enhanced extraction.
+
+        Args:
+            image_url: URL or path to the recipe image
+
+        Returns:
+            Structured recipe data with usage stats
+        """
+        # Simply call the OCR method with empty OCR text
+        # This lets GPT-4 Vision do all the text extraction from the image
+        return await self.extract_recipe_from_image_with_ocr(image_url, "")
 
     def _calculate_cost_text_only(self, usage, model: str) -> float:
         """Calculate estimated cost for text-only requests (no image tokens)"""

@@ -187,8 +187,9 @@ class PhotoExtractor(BaseExtractor):
             image = await asyncio.to_thread(self._preprocess_image_for_ocr, image)
 
             # Run OCR with optimized settings (CPU-bound, run in thread pool)
-            # PSM 6 = Assume a single uniform block of text (good for recipe cards)
-            custom_config = r'--oem 3 --psm 6'
+            # PSM 3 = Fully automatic page segmentation (better for mixed layouts)
+            # OEM 3 = Default, combines legacy + LSTM neural network
+            custom_config = r'--oem 3 --psm 3'
             text = await asyncio.to_thread(
                 pytesseract.image_to_string,
                 image,
@@ -202,33 +203,48 @@ class PhotoExtractor(BaseExtractor):
             return ""
 
     def _preprocess_image_for_ocr(self, image: Image.Image) -> Image.Image:
-        """Preprocess image to improve OCR accuracy"""
+        """
+        Preprocess image to improve OCR accuracy.
+
+        Enhanced preprocessing for better number/quantity recognition:
+        - Upscales small images to ensure adequate resolution
+        - Strong contrast and sharpening for crisp text edges
+        - Brightness adjustment for better visibility
+        """
         try:
             from PIL import ImageEnhance
-            from PIL import ImageFilter
 
             # Convert to RGB if necessary
             if image.mode != 'RGB':
                 image = image.convert('RGB')
 
-            # Resize if image is too large (OCR works best around 300 DPI)
-            # Typical recipe card is ~4x6 inches, so 1200x1800 pixels is ideal
-            max_dimension = 2400
+            # UPSCALE small images (OCR works best around 300 DPI)
+            # Minimum 2000px ensures adequate resolution for text recognition
+            min_dimension = 2000
+            if min(image.size) < min_dimension:
+                ratio = min_dimension / min(image.size)
+                new_size = tuple(int(dim * ratio) for dim in image.size)
+                image = image.resize(new_size, Image.Resampling.LANCZOS)
+                logger.debug(f"Upscaled image from {image.size} to {new_size}")
+
+            # Downscale very large images to avoid memory issues
+            max_dimension = 4000
             if max(image.size) > max_dimension:
                 ratio = max_dimension / max(image.size)
                 new_size = tuple(int(dim * ratio) for dim in image.size)
                 image = image.resize(new_size, Image.Resampling.LANCZOS)
 
-            # Increase contrast for better text recognition
+            # Strong contrast enhancement (2.0) for crisp text edges
             enhancer = ImageEnhance.Contrast(image)
-            image = enhancer.enhance(1.5)
+            image = enhancer.enhance(2.0)
 
-            # Increase sharpness
+            # Strong sharpening (2.0) for better character definition
             enhancer = ImageEnhance.Sharpness(image)
-            image = enhancer.enhance(1.3)
+            image = enhancer.enhance(2.0)
 
-            # Optional: Apply slight denoising
-            image = image.filter(ImageFilter.MedianFilter(size=3))
+            # Slight brightness increase (1.1) helps with dark text
+            enhancer = ImageEnhance.Brightness(image)
+            image = enhancer.enhance(1.1)
 
             return image
 
