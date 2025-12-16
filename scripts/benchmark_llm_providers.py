@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv()
 
-from app.core.config import get_settings
+from app.core.config import get_settings  # noqa: E402
 
 settings = get_settings()
 

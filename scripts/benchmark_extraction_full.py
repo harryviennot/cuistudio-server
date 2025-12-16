@@ -39,7 +39,6 @@ import sys
 import os
 import time
 import json
-import csv
 import argparse
 import logging
 from datetime import datetime
@@ -923,7 +922,6 @@ def generate_csv_report(
 ) -> str:
     """Generate CSV report"""
     output = []
-    writer = csv.writer(output := [])
 
     # Header
     header = [

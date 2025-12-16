@@ -435,6 +435,15 @@ class UploadService:
         """
         import os
 
+        # Sanitize job_id to prevent path traversal attacks
+        # Only allow alphanumeric characters, hyphens, and underscores
+        sanitized_job_id = re.sub(r'[^a-zA-Z0-9_-]', '', job_id)
+        if not sanitized_job_id or sanitized_job_id != job_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid job ID format"
+            )
+
         # Validate video file
         self._validate_video_file(file)
 
@@ -452,10 +461,10 @@ class UploadService:
 
             # Generate storage path: {job_id}/{uuid}.{ext}
             file_extension = self._get_video_extension(file.filename, file.content_type)
-            relative_path = f"{job_id}/{uuid.uuid4()}.{file_extension}"
+            relative_path = f"{sanitized_job_id}/{uuid.uuid4()}.{file_extension}"
 
             # Create job directory if it doesn't exist
-            job_dir = os.path.join(TEMP_VIDEO_DIR, job_id)
+            job_dir = os.path.join(TEMP_VIDEO_DIR, sanitized_job_id)
             os.makedirs(job_dir, exist_ok=True)
 
             # Write to local file
@@ -463,7 +472,7 @@ class UploadService:
             with open(full_path, "wb") as f:
                 f.write(file_content)
 
-            logger.info(f"Successfully saved video for job {job_id}: {relative_path} ({file_size} bytes)")
+            logger.info(f"Successfully saved video for job {sanitized_job_id}: {relative_path} ({file_size} bytes)")
 
             return {
                 "path": relative_path,
@@ -539,9 +548,23 @@ class UploadService:
 
         Returns:
             Full path to the video file
+
+        Raises:
+            HTTPException: If path traversal is detected
         """
         import os
-        return os.path.join(TEMP_VIDEO_DIR, relative_path)
+
+        # Resolve the full path and ensure it stays within TEMP_VIDEO_DIR
+        base_dir = os.path.abspath(TEMP_VIDEO_DIR)
+        full_path = os.path.abspath(os.path.join(TEMP_VIDEO_DIR, relative_path))
+
+        if not full_path.startswith(base_dir + os.sep):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid video path"
+            )
+
+        return full_path
 
     async def delete_local_video(self, relative_path: str) -> bool:
         """
@@ -556,7 +579,13 @@ class UploadService:
         import os
 
         try:
-            full_path = os.path.join(TEMP_VIDEO_DIR, relative_path)
+            # Resolve the full path and ensure it stays within TEMP_VIDEO_DIR
+            base_dir = os.path.abspath(TEMP_VIDEO_DIR)
+            full_path = os.path.abspath(os.path.join(TEMP_VIDEO_DIR, relative_path))
+
+            if not full_path.startswith(base_dir + os.sep):
+                logger.warning(f"Path traversal attempt blocked: {relative_path}")
+                return False
 
             if os.path.exists(full_path):
                 os.remove(full_path)
