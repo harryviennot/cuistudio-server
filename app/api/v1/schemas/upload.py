@@ -76,3 +76,20 @@ class MultipleImageUploadResponse(BaseModel):
             }
         }
     }
+
+
+class VideoUploadResponse(BaseModel):
+    """Response for video upload (used for Instagram client-side download)"""
+    path: str = Field(..., description="Relative storage path of the video")
+    size: int = Field(..., description="File size in bytes")
+    content_type: str = Field(..., description="MIME type of the video")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "path": "job-id/uuid.mp4",
+                "size": 52428800,
+                "content_type": "video/mp4"
+            }
+        }
+    }

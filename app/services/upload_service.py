@@ -26,6 +26,13 @@ PRIVATE_BUCKETS = ["cooking-events"]
 SIGNED_URL_EXPIRY_SECONDS = 3600  # 1 hour
 MAX_FILE_SIZE_BYTES = MAX_IMAGE_SIZE_MB * 1024 * 1024  # Convert MB to bytes
 
+# Video upload constants (local filesystem storage)
+TEMP_VIDEO_DIR = "temp/videos"
+ALLOWED_VIDEO_TYPES = {"video/mp4", "video/quicktime", "video/x-m4v"}
+ALLOWED_VIDEO_EXTENSIONS = {"mp4", "mov", "m4v"}
+MAX_VIDEO_SIZE_MB = 500
+MAX_VIDEO_SIZE_BYTES = MAX_VIDEO_SIZE_MB * 1024 * 1024
+
 # Formats that need conversion to JPEG for OpenAI compatibility
 FORMATS_TO_CONVERT = {'image/heic', 'image/heif'}
 
@@ -400,3 +407,197 @@ class UploadService:
             return match.group(1)
 
         return None
+
+    # ========== Video Upload Methods (for Instagram client-side download) ==========
+    # Videos are stored on local filesystem instead of Supabase (50MB limit on free tier)
+
+    async def save_video_locally(
+        self,
+        file: UploadFile,
+        job_id: str
+    ) -> Dict[str, any]:
+        """
+        Save a video to local filesystem for extraction processing.
+
+        Used when the mobile client downloads an Instagram video and uploads
+        it for server-side processing. Videos are stored locally to avoid
+        Supabase storage limits.
+
+        Args:
+            file: The uploaded video file
+            job_id: Extraction job ID (used in storage path)
+
+        Returns:
+            Dict with path, size, and content_type
+
+        Raises:
+            HTTPException: If file validation fails or save fails
+        """
+        import os
+
+        # Sanitize job_id to prevent path traversal attacks
+        # Only allow alphanumeric characters, hyphens, and underscores
+        sanitized_job_id = re.sub(r'[^a-zA-Z0-9_-]', '', job_id)
+        if not sanitized_job_id or sanitized_job_id != job_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid job ID format"
+            )
+
+        # Validate video file
+        self._validate_video_file(file)
+
+        try:
+            # Read file content
+            file_content = await file.read()
+            file_size = len(file_content)
+
+            # Validate file size
+            if file_size > MAX_VIDEO_SIZE_BYTES:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=f"Video size exceeds maximum allowed size of {MAX_VIDEO_SIZE_MB}MB"
+                )
+
+            # Generate storage path: {job_id}/{uuid}.{ext}
+            file_extension = self._get_video_extension(file.filename, file.content_type)
+            relative_path = f"{sanitized_job_id}/{uuid.uuid4()}.{file_extension}"
+
+            # Create job directory if it doesn't exist
+            job_dir = os.path.join(TEMP_VIDEO_DIR, sanitized_job_id)
+            os.makedirs(job_dir, exist_ok=True)
+
+            # Write to local file
+            full_path = os.path.join(TEMP_VIDEO_DIR, relative_path)
+            with open(full_path, "wb") as f:
+                f.write(file_content)
+
+            logger.info(f"Successfully saved video for job {sanitized_job_id}: {relative_path} ({file_size} bytes)")
+
+            return {
+                "path": relative_path,
+                "size": file_size,
+                "content_type": file.content_type,
+            }
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to save video: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to save video: {str(e)}"
+            )
+        finally:
+            await file.seek(0)
+
+    def _validate_video_file(self, file: UploadFile) -> None:
+        """
+        Validate video file type.
+
+        Args:
+            file: The file to validate
+
+        Raises:
+            HTTPException: If file is invalid
+        """
+        # Check content type
+        if file.content_type not in ALLOWED_VIDEO_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid video type: {file.content_type}. Allowed types: {', '.join(ALLOWED_VIDEO_TYPES)}"
+            )
+
+        # Check file extension
+        if file.filename:
+            extension = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+            if extension not in ALLOWED_VIDEO_EXTENSIONS:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid video extension: .{extension}. Allowed extensions: {', '.join(ALLOWED_VIDEO_EXTENSIONS)}"
+                )
+
+    def _get_video_extension(self, filename: str, content_type: str) -> str:
+        """
+        Get video file extension from filename or content type.
+
+        Args:
+            filename: Original filename
+            content_type: MIME type
+
+        Returns:
+            File extension (lowercase, without dot)
+        """
+        if filename and "." in filename:
+            return filename.rsplit(".", 1)[-1].lower()
+
+        # Fallback based on content type
+        type_to_ext = {
+            "video/mp4": "mp4",
+            "video/quicktime": "mov",
+            "video/x-m4v": "m4v",
+        }
+        return type_to_ext.get(content_type, "mp4")
+
+    def get_video_full_path(self, relative_path: str) -> str:
+        """
+        Get the full filesystem path for a video.
+
+        Args:
+            relative_path: Relative path (e.g., "job-id/uuid.mp4")
+
+        Returns:
+            Full path to the video file
+
+        Raises:
+            HTTPException: If path traversal is detected
+        """
+        import os
+
+        # Resolve the full path and ensure it stays within TEMP_VIDEO_DIR
+        base_dir = os.path.abspath(TEMP_VIDEO_DIR)
+        full_path = os.path.abspath(os.path.join(TEMP_VIDEO_DIR, relative_path))
+
+        if not full_path.startswith(base_dir + os.sep):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid video path"
+            )
+
+        return full_path
+
+    async def delete_local_video(self, relative_path: str) -> bool:
+        """
+        Delete a video from local filesystem.
+
+        Args:
+            relative_path: Relative path in temp/videos directory
+
+        Returns:
+            True if deletion was successful
+        """
+        import os
+
+        try:
+            # Resolve the full path and ensure it stays within TEMP_VIDEO_DIR
+            base_dir = os.path.abspath(TEMP_VIDEO_DIR)
+            full_path = os.path.abspath(os.path.join(TEMP_VIDEO_DIR, relative_path))
+
+            if not full_path.startswith(base_dir + os.sep):
+                logger.warning(f"Path traversal attempt blocked: {relative_path}")
+                return False
+
+            if os.path.exists(full_path):
+                os.remove(full_path)
+                logger.info(f"Deleted local video: {relative_path}")
+
+                # Try to remove parent directory if empty
+                parent_dir = os.path.dirname(full_path)
+                if os.path.isdir(parent_dir) and not os.listdir(parent_dir):
+                    os.rmdir(parent_dir)
+                    logger.info(f"Removed empty directory: {parent_dir}")
+
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to delete local video {relative_path}: {str(e)}")
+            return False

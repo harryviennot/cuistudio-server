@@ -1,24 +1,30 @@
 """
 Video extractor for TikTok, Reels, YouTube Shorts
 
-NOTE: All blocking operations (yt-dlp, whisper, moviepy, cv2, pytesseract)
+Simplified extraction flow:
+1. Download video with yt-dlp (get metadata + thumbnail URL)
+2. Extract audio with MoviePy
+3. Transcribe audio with Whisper
+4. Return transcript + description (no frame OCR)
+
+NOTE: All blocking operations (yt-dlp, whisper, moviepy)
 are wrapped in asyncio.to_thread() to prevent blocking the event loop.
 This allows SSE progress events to be sent in real-time.
 """
 import os
-import shutil
 import logging
 import asyncio
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Any, List
+
 import yt_dlp
 import whisper
 from moviepy.video.io.VideoFileClip import VideoFileClip
-import cv2
 
 from app.services.extractors.base_extractor import BaseExtractor
 from app.core.config import get_settings
+from app.domain.extraction_steps import ExtractionStep
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -45,25 +51,31 @@ class VideoExtractor(BaseExtractor):
     def __init__(self, progress_callback=None):
         super().__init__(progress_callback)
         self.download_dir = "temp/videos"
-        self.frames_dir = "temp/frames"
         os.makedirs(self.download_dir, exist_ok=True)
-        os.makedirs(self.frames_dir, exist_ok=True)
         # Track temp files for cleanup
         self._temp_files: List[Path] = []
-        self._temp_dirs: List[Path] = []
+
+    def _get_best_thumbnail(self, info: dict) -> str | None:
+        """Get the best thumbnail URL, preferring creator-selected cover."""
+        thumbnails = info.get("thumbnails", [])
+
+        # Build lookup by id
+        thumb_by_id = {t.get("id"): t.get("url") for t in thumbnails}
+
+        # Prefer 'cover' (creator-selected), fallback to 'originCover', then default
+        return (
+            thumb_by_id.get("cover")
+            or thumb_by_id.get("originCover")
+            or info.get("thumbnail")
+        )
 
     def _track_temp_file(self, path: str) -> str:
         """Track a temp file for cleanup after extraction."""
         self._temp_files.append(Path(path))
         return path
 
-    def _track_temp_dir(self, path: str) -> str:
-        """Track a temp directory for cleanup after extraction."""
-        self._temp_dirs.append(Path(path))
-        return path
-
     def _cleanup_temp_files(self):
-        """Remove all tracked temp files and directories."""
+        """Remove all tracked temp files."""
         for file_path in self._temp_files:
             try:
                 if file_path.exists():
@@ -72,79 +84,51 @@ class VideoExtractor(BaseExtractor):
             except Exception as e:
                 logger.warning(f"Failed to cleanup temp file {file_path}: {e}")
 
-        for dir_path in self._temp_dirs:
-            try:
-                if dir_path.exists():
-                    shutil.rmtree(dir_path)
-                    logger.debug(f"Cleaned up temp dir: {dir_path}")
-            except Exception as e:
-                logger.warning(f"Failed to cleanup temp dir {dir_path}: {e}")
-
         self._temp_files.clear()
-        self._temp_dirs.clear()
         logger.info("Temp file cleanup completed")
 
     async def extract(self, source: str, **kwargs) -> Dict[str, Any]:
         """
-        Extract recipe content from video URL
+        Extract recipe content from video URL.
+
+        Simplified flow (no frame OCR):
+        1. Download video and get metadata
+        2. Extract and transcribe audio
+        3. Combine transcript with video description
 
         Args:
             source: Video URL (TikTok, Instagram, YouTube)
 
         Returns:
-            Dict containing transcript, ocr_text, description, video metadata, and video_path
+            Dict containing transcript, description, video metadata, and thumbnail URL
         """
         try:
-            self.update_progress(5, "Downloading video")
+            self.update_progress(5, ExtractionStep.VIDEO_DOWNLOADING)
             video_path, video_metadata = await self._download_video(source)
-            # Track video file for cleanup
             self._track_temp_file(video_path)
 
             description = video_metadata.get("description", "")
 
-            # Run audio extraction and frame extraction in parallel
-            # These are independent operations on the same video file
-            self.update_progress(20, "Processing video (audio + frames)")
-
-            audio_task = asyncio.create_task(self._extract_audio(video_path))
-            frames_task = asyncio.create_task(self._extract_key_frames(video_path))
-
-            # Wait for both to complete
-            audio_path, frames = await asyncio.gather(audio_task, frames_task)
-
-            # Track files for cleanup
+            self.update_progress(30, ExtractionStep.VIDEO_EXTRACTING_AUDIO)
+            audio_path = await self._extract_audio(video_path)
             self._track_temp_file(audio_path)
-            for frame_path in frames:
-                self._track_temp_file(frame_path)
 
-            # Run transcription and OCR in parallel - these are CPU-intensive but independent
-            self.update_progress(40, "Analyzing content (transcription + OCR)")
+            self.update_progress(50, ExtractionStep.VIDEO_TRANSCRIBING)
+            transcript = await self._transcribe_audio(audio_path)
 
-            transcript_task = asyncio.create_task(self._transcribe_audio(audio_path))
-            ocr_task = asyncio.create_task(self._run_ocr(frames))
+            self.update_progress(90, ExtractionStep.VIDEO_COMBINING)
 
-            # Wait for both to complete
-            transcript, ocr_text = await asyncio.gather(transcript_task, ocr_task)
-
-            self.update_progress(90, "Combining extracted content")
-
-            # Combine all extracted text
-            combined_text = f"""
-Video Description: {description}
+            # Combine transcript and description (no OCR text)
+            combined_text = f"""Video Description: {description}
 
 Transcript:
-{transcript}
+{transcript}"""
 
-Text from Video (OCR):
-{ocr_text}
-"""
-
-            self.update_progress(100, "Extraction complete")
+            self.update_progress(100, ExtractionStep.COMPLETE)
 
             return {
                 "text": combined_text.strip(),
                 "transcript": transcript,
-                "ocr_text": ocr_text,
                 "description": description,
                 "video_path": video_path,
                 "source_url": source,
@@ -207,7 +191,7 @@ Text from Video (OCR):
 
                     # URLs
                     "webpage_url": info.get("webpage_url"),
-                    "thumbnail": info.get("thumbnail"),
+                    "thumbnail": self._get_best_thumbnail(info),
 
                     # Video stats
                     "duration": info.get("duration"),
@@ -258,7 +242,7 @@ Text from Video (OCR):
             raise
 
     async def _extract_audio(self, video_path: str) -> str:
-        """Extract audio from video"""
+        """Extract audio from video."""
         def _sync_extract():
             """Synchronous audio extraction - runs in thread pool"""
             audio_path = video_path.replace(os.path.splitext(video_path)[1], '.mp3')
@@ -274,7 +258,7 @@ Text from Video (OCR):
             raise
 
     async def _transcribe_audio(self, audio_path: str) -> str:
-        """Transcribe audio using OpenAI Whisper with cached model"""
+        """Transcribe audio using OpenAI Whisper with cached model."""
         def _sync_transcribe():
             """Synchronous transcription - runs in thread pool (CPU-intensive)"""
             # Use cached Whisper model (loaded once per process)
@@ -289,59 +273,147 @@ Text from Video (OCR):
             logger.error(f"Error transcribing audio: {str(e)}")
             return ""
 
-    async def _extract_key_frames(self, video_path: str, num_frames: int = 10) -> list[str]:
-        """Extract key frames from video"""
-        def _sync_extract_frames():
-            """Synchronous frame extraction - runs in thread pool"""
-            frames_dir = "temp/frames"
-            os.makedirs(frames_dir, exist_ok=True)
+    async def extract_video_url(self, url: str) -> Dict[str, Any]:
+        """
+        Extract direct video URL and metadata WITHOUT downloading.
 
-            cap = cv2.VideoCapture(video_path)
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        Used for platforms requiring client-side download (e.g., Instagram).
+        The server extracts the direct MP4 URL using yt-dlp, and the client
+        downloads the video using their own IP to bypass platform blocking.
 
-            frame_interval = max(1, total_frames // num_frames)
-            frame_paths = []
+        Args:
+            url: Video URL (Instagram reel, etc.)
 
-            for i in range(0, total_frames, frame_interval):
-                cap.set(cv2.CAP_PROP_POS_FRAMES, i)
-                ret, frame = cap.read()
+        Returns:
+            Dict containing:
+                - video_url: Direct MP4 URL for client to download
+                - thumbnail_url: Thumbnail image URL
+                - description: Video description
+                - platform: Platform name
+                - Other metadata (title, duration, uploader, etc.)
+        """
+        def _sync_extract_info():
+            """Synchronous info extraction - runs in thread pool"""
+            ydl_opts = {
+                'format': 'best',
+                'quiet': True,
+                'skip_download': True,  # Don't download, just extract info
+                'no_warnings': True,
+            }
 
-                if ret:
-                    frame_path = f"{frames_dir}/frame_{i}.jpg"
-                    cv2.imwrite(frame_path, frame)
-                    frame_paths.append(frame_path)
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
 
-                if len(frame_paths) >= num_frames:
-                    break
+                # Get the direct video URL
+                video_url = info.get('url')
 
-            cap.release()
-            return frame_paths
+                # If not directly available, get from formats
+                if not video_url and info.get('formats'):
+                    # Get best format with direct URL
+                    for f in reversed(info['formats']):
+                        if f.get('url') and f.get('ext') in ['mp4', 'webm', 'mov']:
+                            video_url = f['url']
+                            break
+
+                if not video_url:
+                    raise ValueError("Could not extract direct video URL")
+
+                return {
+                    "video_url": video_url,
+                    "thumbnail_url": self._get_best_thumbnail(info),
+                    "description": info.get("description", ""),
+                    "title": info.get("title"),
+                    "duration": info.get("duration"),
+                    "view_count": info.get("view_count"),
+                    "like_count": info.get("like_count"),
+                    "upload_date": info.get("upload_date"),
+                    "uploader": info.get("uploader"),
+                    "uploader_id": info.get("uploader_id"),
+                    "channel": info.get("channel"),
+                    "channel_url": info.get("channel_url"),
+                    "platform": info.get("extractor", "").lower(),
+                    "webpage_url": info.get("webpage_url"),
+                }
 
         try:
-            return await asyncio.to_thread(_sync_extract_frames)
+            self.update_progress(10, ExtractionStep.VIDEO_DOWNLOADING)
+            result = await asyncio.to_thread(_sync_extract_info)
+            logger.info(
+                f"Extracted video URL for client download: {result.get('title', 'Unknown')} "
+                f"from {result.get('platform', 'unknown')}"
+            )
+            return result
         except Exception as e:
-            logger.error(f"Error extracting frames: {str(e)}")
-            return []
+            logger.error(f"Error extracting video URL: {str(e)}")
+            raise
 
-    async def _run_ocr(self, frame_paths: list[str]) -> str:
-        """Run OCR on frames using pytesseract"""
-        def _sync_ocr():
-            """Synchronous OCR - runs in thread pool"""
-            import pytesseract
-            from PIL import Image
+    async def extract_from_file(
+        self,
+        file_path: str,
+        metadata: Dict[str, Any] | None = None
+    ) -> Dict[str, Any]:
+        """
+        Extract recipe content from a local video file.
 
-            all_text = []
+        Used after the client uploads a video that was downloaded client-side.
+        Processes the video file (audio extraction, transcription) and combines
+        with previously extracted metadata.
 
-            for frame_path in frame_paths:
-                image = Image.open(frame_path)
-                text = pytesseract.image_to_string(image)
-                if text.strip():
-                    all_text.append(text.strip())
+        Args:
+            file_path: Path to local video file
+            metadata: Optional metadata from previous extract_video_url() call
 
-            return "\n\n".join(all_text)
+        Returns:
+            Dict containing transcript, description, and combined text
+        """
+        metadata = metadata or {}
 
         try:
-            return await asyncio.to_thread(_sync_ocr)
+            # Track file for cleanup
+            self._track_temp_file(file_path)
+
+            self.update_progress(30, ExtractionStep.VIDEO_EXTRACTING_AUDIO)
+            audio_path = await self._extract_audio(file_path)
+            self._track_temp_file(audio_path)
+
+            self.update_progress(50, ExtractionStep.VIDEO_TRANSCRIBING)
+            transcript = await self._transcribe_audio(audio_path)
+
+            self.update_progress(90, ExtractionStep.VIDEO_COMBINING)
+
+            # Get description from metadata or empty string
+            description = metadata.get("description", "")
+
+            # Combine transcript and description
+            combined_text = f"""Video Description: {description}
+
+Transcript:
+{transcript}"""
+
+            self.update_progress(100, ExtractionStep.COMPLETE)
+
+            return {
+                "text": combined_text.strip(),
+                "transcript": transcript,
+                "description": description,
+                "video_path": file_path,
+                # Include metadata from URL extraction
+                "video_title": metadata.get("title"),
+                "thumbnail_url": metadata.get("thumbnail_url"),
+                "webpage_url": metadata.get("webpage_url"),
+                "duration": metadata.get("duration"),
+                "view_count": metadata.get("view_count"),
+                "like_count": metadata.get("like_count"),
+                "upload_date": metadata.get("upload_date"),
+                "uploader": metadata.get("uploader"),
+                "uploader_id": metadata.get("uploader_id"),
+                "channel": metadata.get("channel"),
+                "channel_url": metadata.get("channel_url"),
+            }
+
         except Exception as e:
-            logger.error(f"Error running OCR: {str(e)}")
-            return ""
+            logger.error(f"Error extracting from video file: {str(e)}")
+            raise
+        finally:
+            # Always cleanup temp files, even on error
+            self._cleanup_temp_files()

@@ -1,6 +1,8 @@
 """
 Extraction orchestrator service
 Coordinates extraction from different sources and normalization
+
+Uses Gemini 2.5 Flash Lite for fast, cost-effective recipe normalization.
 """
 import asyncio
 import logging
@@ -8,13 +10,14 @@ from typing import Dict, Any, Optional, Callable, Union, List
 from supabase import Client
 
 from app.domain.enums import SourceType, ExtractionStatus
-from app.domain.exceptions import NotARecipeError, WebsiteBlockedError
+from app.domain.exceptions import NotARecipeError, WebsiteBlockedError, InstagramBlockedError
+from app.domain.extraction_steps import ExtractionStep
 from app.services.extractors.video_extractor import VideoExtractor
 from app.services.extractors.photo_extractor import PhotoExtractor
 from app.services.extractors.voice_extractor import VoiceExtractor
 from app.services.extractors.paste_extractor import PasteExtractor
 from app.services.extractors.link_extractor import LinkExtractor
-from app.services.openai_service import OpenAIService
+from app.services.gemini_service import GeminiService
 from app.services.flux_service import FluxService
 from app.services.video_url_parser import VideoURLParser
 from app.services.recipe_save_service import RecipeSaveService
@@ -31,7 +34,7 @@ class ExtractionService:
 
     def __init__(self, supabase: Client):
         self.supabase = supabase
-        self.openai_service = OpenAIService()
+        self.gemini_service = GeminiService()
         self.flux_service = FluxService(supabase)
         self.recipe_repo = RecipeRepository(supabase)
         self.video_source_repo = VideoSourceRepository(supabase)
@@ -66,14 +69,14 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.PROCESSING,
                     0,
-                    "Starting extraction"
+                    ExtractionStep.STARTING
                 )
 
             # Create progress callback that updates database if job_id is provided
             # Scale extractor progress (0-100%) to 0-50% range so service steps can use 50-100%
             def sync_progress_callback(percentage: int, step: str):
                 """Synchronous wrapper for progress updates with scaling"""
-                scaled_percentage = int(percentage * 0.5)
+                scaled_percentage = int(percentage * 0.7)  # Scale 0-100% to 0-70%
                 if progress_callback:
                     progress_callback(scaled_percentage, step)
                 if job_id:
@@ -100,41 +103,41 @@ class ExtractionService:
                     await self._update_job_status(
                         job_id,
                         ExtractionStatus.PROCESSING,
-                        55,
-                        "Recipe data extracted"
+                        70,
+                        ExtractionStep.NORMALIZING
                     )
                 elif progress_callback:
                     # Only use progress_callback if no job_id (backward compatibility)
-                    progress_callback(55, "Recipe data extracted")
+                    progress_callback(70, ExtractionStep.NORMALIZING)
             else:
                 # Other extractors return raw text that needs normalization
                 if job_id:
                     await self._update_job_status(
                         job_id,
                         ExtractionStatus.PROCESSING,
-                        55,
-                        "Normalizing recipe data"
+                        70,
+                        ExtractionStep.NORMALIZING
                     )
                 elif progress_callback:
                     # Only use progress_callback if no job_id (backward compatibility)
-                    progress_callback(55, "Normalizing recipe data")
+                    progress_callback(70, ExtractionStep.NORMALIZING)
 
-                normalized_data = await self.openai_service.normalize_recipe(
+                normalized_data = await self.gemini_service.normalize_recipe(
                     raw_content["text"],
                     source_type.value
                 )
 
-            # Step 3: Prepare recipe for database (70% range)
+            # Step 3: Prepare recipe for database (75% range)
             if job_id:
                 await self._update_job_status(
                     job_id,
                     ExtractionStatus.PROCESSING,
-                    70,
-                    "Preparing recipe data"
+                    75,
+                    ExtractionStep.PREPARING
                 )
             elif progress_callback:
                 # Only use progress_callback if no job_id (backward compatibility)
-                progress_callback(70, "Preparing recipe data")
+                progress_callback(75, ExtractionStep.PREPARING)
 
             # Get source URLs (could be single or multiple)
             # For backwards compatibility with non-photo sources
@@ -144,7 +147,7 @@ class ExtractionService:
             # Determine initial image_url (from extraction source)
             initial_image_url = source_urls[0] if source_urls else None
 
-            # Step 4: Generate AI image for non-webpage sources (75-85% range)
+            # Step 4: Generate AI image for non-webpage sources (80-90% range)
             # LINK sources with webpages already have images from scraping
             # Check if this is NOT a LINK type (which would be handled by LinkExtractor)
             if source_type != SourceType.LINK:
@@ -152,11 +155,11 @@ class ExtractionService:
                     await self._update_job_status(
                         job_id,
                         ExtractionStatus.PROCESSING,
-                        75,
-                        "Generating AI image"
+                        80,
+                        ExtractionStep.GENERATING_IMAGE
                     )
                 elif progress_callback:
-                    progress_callback(75, "Generating AI image")
+                    progress_callback(80, ExtractionStep.GENERATING_IMAGE)
 
                 # Generate image synchronously (recipe_id will be auto-generated)
                 generated_image_url = await self.flux_service.generate_recipe_image(
@@ -216,12 +219,12 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.COMPLETED,
                     100,
-                    "Extraction complete",
+                    ExtractionStep.COMPLETE,
                     recipe_id=recipe["id"]
                 )
             elif progress_callback:
                 # Only use progress_callback if no job_id (backward compatibility)
-                progress_callback(100, "Recipe created successfully")
+                progress_callback(100, ExtractionStep.COMPLETE)
 
             logger.info(f"Successfully created recipe {recipe['id']} from {source_type.value}")
 
@@ -236,7 +239,7 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.FAILED,
                     0,
-                    "Extraction failed",
+                    ExtractionStep.STARTING,
                     error_message=str(e)
                 )
 
@@ -263,17 +266,35 @@ class ExtractionService:
         job_id: str,
         status: ExtractionStatus,
         progress: int,
-        step: str,
+        step: Union[ExtractionStep, str],
         recipe_id: Optional[str] = None,
         error_message: Optional[str] = None,
         existing_recipe_id: Optional[str] = None
     ):
         """Update extraction job status"""
         try:
+            # Prevent progress from going backwards (except for error states)
+            if status not in [ExtractionStatus.FAILED, ExtractionStatus.CANCELLED]:
+                try:
+                    result = await asyncio.to_thread(
+                        lambda: self.supabase.table("extraction_jobs")
+                            .select("progress_percentage")
+                            .eq("id", job_id)
+                            .single()
+                            .execute()
+                    )
+                    current_progress = result.data.get("progress_percentage", 0) if result.data else 0
+                    progress = max(progress, current_progress)
+                except Exception:
+                    pass  # If fetch fails, proceed with original progress
+
+            # Convert ExtractionStep enum to string value if needed
+            step_value = step.value if isinstance(step, ExtractionStep) else step
+
             update_data = {
                 "status": status.value,
                 "progress_percentage": progress,
-                "current_step": step
+                "current_step": step_value
             }
 
             if recipe_id:
@@ -300,7 +321,7 @@ class ExtractionService:
                     "id": job_id,
                     "status": status.value,
                     "progress_percentage": progress,
-                    "current_step": step
+                    "current_step": step_value
                 }
                 if recipe_id:
                     event_data["recipe_id"] = recipe_id
@@ -353,7 +374,20 @@ class ExtractionService:
                 .eq("id", job_id)\
                 .execute()
 
-            return result.data[0] if result.data else None
+            if not result.data:
+                return None
+
+            job = result.data[0]
+
+            # Handle video_metadata - may be stored as JSON string (legacy) or dict
+            if job.get("video_metadata") and isinstance(job["video_metadata"], str):
+                import json
+                try:
+                    job["video_metadata"] = json.loads(job["video_metadata"])
+                except json.JSONDecodeError:
+                    job["video_metadata"] = None
+
+            return job
 
         except Exception as e:
             logger.error(f"Error getting job status: {str(e)}")
@@ -464,7 +498,7 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.PROCESSING,
                     0,
-                    "Starting extraction"
+                    ExtractionStep.STARTING
                 )
 
             # Check for duplicates based on source type
@@ -517,7 +551,7 @@ class ExtractionService:
                             job_id,
                             ExtractionStatus.COMPLETED,
                             100,
-                            "Recipe already exists",
+                            ExtractionStep.COMPLETE,
                             existing_recipe_id=existing_recipe_id
                         )
 
@@ -532,7 +566,7 @@ class ExtractionService:
             def sync_progress_callback(percentage: int, step: str):
                 """Synchronous wrapper for progress updates with scaling"""
                 # Scale extractor's 0-100% to 0-50% range
-                scaled_percentage = int(percentage * 0.5)
+                scaled_percentage = int(percentage * 0.7)  # Scale 0-100% to 0-70%
                 if progress_callback:
                     progress_callback(scaled_percentage, step)
                 if job_id:
@@ -547,6 +581,34 @@ class ExtractionService:
             # Extractor progress is scaled to 0-50% range via sync_progress_callback above
             extractor = self._get_extractor(source_type, sync_progress_callback)
             raw_content = await extractor.extract(source)
+
+            # Check if client-side download is needed (Instagram case)
+            if raw_content.get("needs_client_download"):
+                logger.info(f"Client-side download required for job {job_id}")
+                if job_id:
+                    # Store video metadata and download URL in job
+                    video_metadata = {
+                        "thumbnail_url": raw_content.get("thumbnail_url"),
+                        "description": raw_content.get("description"),
+                        "title": raw_content.get("title"),
+                        "platform": raw_content.get("platform"),
+                        "duration": raw_content.get("duration"),
+                        "uploader": raw_content.get("uploader"),
+                        "webpage_url": raw_content.get("webpage_url"),
+                    }
+
+                    await self._update_job_for_client_download(
+                        job_id=job_id,
+                        video_download_url=raw_content.get("video_url"),
+                        video_metadata=video_metadata
+                    )
+
+                return {
+                    "job_id": job_id,
+                    "status": "needs_client_download",
+                    "recipe_id": None,
+                    "video_url": raw_content.get("video_url"),
+                }
 
             # Check if job was cancelled after extraction
             if job_id:
@@ -566,8 +628,8 @@ class ExtractionService:
                     await self._update_job_status(
                         job_id,
                         ExtractionStatus.PROCESSING,
-                        55,
-                        "Recipe data extracted"
+                        70,
+                        ExtractionStep.NORMALIZING
                     )
             else:
                 # Check if job was cancelled before normalization
@@ -585,21 +647,21 @@ class ExtractionService:
                     await self._update_job_status(
                         job_id,
                         ExtractionStatus.PROCESSING,
-                        55,
-                        "Normalizing recipe data"
+                        70,
+                        ExtractionStep.NORMALIZING
                     )
-                normalized_data = await self.openai_service.normalize_recipe(
+                normalized_data = await self.gemini_service.normalize_recipe(
                     raw_content["text"],
                     source_type.value
                 )
 
-            # Step 3: Prepare extraction data (70% range)
+            # Step 3: Prepare extraction data (75% range)
             if job_id:
                 await self._update_job_status(
                     job_id,
                     ExtractionStatus.PROCESSING,
-                    70,
-                    "Preparing recipe data"
+                    75,
+                    ExtractionStep.PREPARING
                 )
 
             # Get source URLs
@@ -607,7 +669,7 @@ class ExtractionService:
             source_urls = raw_content.get("source_urls", [source_url] if source_url else [])
             initial_image_url = source_urls[0] if source_urls else None
 
-            # Step 4: Handle image based on source type (75-85% range)
+            # Step 4: Handle image based on source type (80-90% range)
             # For LINK type, check detected_type to determine handling
             detected_type = raw_content.get("detected_type")
             is_video_content = source_type == SourceType.VIDEO or detected_type == "video"
@@ -625,8 +687,8 @@ class ExtractionService:
                     await self._update_job_status(
                         job_id,
                         ExtractionStatus.PROCESSING,
-                        75,
-                        "Generating AI image"
+                        80,
+                        ExtractionStep.GENERATING_IMAGE
                     )
 
                 generated_image_url = await self.flux_service.generate_recipe_image(
@@ -688,7 +750,7 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.PROCESSING,
                     90,
-                    "Creating draft recipe"
+                    ExtractionStep.SAVING
                 )
 
             result = await self.recipe_save_service.create_draft_recipe(
@@ -708,7 +770,7 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.COMPLETED,
                     100,
-                    "Extraction complete",
+                    ExtractionStep.COMPLETE,
                     recipe_id=recipe_id
                 )
 
@@ -727,7 +789,7 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.NOT_A_RECIPE,
                     100,
-                    "Content analysis complete",
+                    ExtractionStep.COMPLETE,
                     error_message=e.message
                 )
             return {
@@ -743,12 +805,28 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.WEBSITE_BLOCKED,
                     100,
-                    "Website blocks automated extraction",
+                    ExtractionStep.COMPLETE,
                     error_message=e.message
                 )
             return {
                 "job_id": job_id,
                 "status": "website_blocked",
+                "recipe_id": None
+            }
+
+        except InstagramBlockedError as e:
+            logger.info(f"Instagram blocks extraction: {e.url}")
+            if job_id:
+                await self._update_job_status(
+                    job_id,
+                    ExtractionStatus.FAILED,
+                    100,
+                    ExtractionStep.COMPLETE,
+                    error_message=e.message
+                )
+            return {
+                "job_id": job_id,
+                "status": "instagram_blocked",
                 "recipe_id": None
             }
 
@@ -759,7 +837,7 @@ class ExtractionService:
                     job_id,
                     ExtractionStatus.FAILED,
                     0,
-                    "Extraction failed",
+                    ExtractionStep.STARTING,
                     error_message=str(e)
                 )
             raise
@@ -910,4 +988,238 @@ class ExtractionService:
         }
 
         return metadata
+
+    async def _update_job_for_client_download(
+        self,
+        job_id: str,
+        video_download_url: str,
+        video_metadata: Dict[str, Any]
+    ):
+        """
+        Update extraction job to signal client-side download is needed.
+
+        Args:
+            job_id: Extraction job ID
+            video_download_url: Direct MP4 URL for client to download
+            video_metadata: Metadata extracted from video URL
+        """
+        try:
+            update_data = {
+                "status": ExtractionStatus.NEEDS_CLIENT_DOWNLOAD.value,
+                "progress_percentage": 10,  # Client download + upload will go 10-50%
+                "current_step": "Waiting for client download",
+                "video_download_url": video_download_url,
+                "video_metadata": video_metadata,  # Supabase handles JSONB serialization
+            }
+
+            await asyncio.to_thread(
+                lambda: self.supabase.table("extraction_jobs")
+                    .update(update_data)
+                    .eq("id", job_id)
+                    .execute()
+            )
+
+            # Broadcast event to SSE subscribers
+            try:
+                broadcaster = get_event_broadcaster()
+                event_data = {
+                    "id": job_id,
+                    "status": ExtractionStatus.NEEDS_CLIENT_DOWNLOAD.value,
+                    "progress_percentage": 10,  # Client download + upload will go 10-50%
+                    "current_step": "Waiting for client download",
+                    "video_download_url": video_download_url,
+                    "video_metadata": video_metadata,
+                }
+                await broadcaster.publish(job_id, event_data)
+                logger.debug(f"Broadcasted client_download event for job {job_id}")
+            except Exception as broadcast_error:
+                logger.error(f"Error broadcasting event: {str(broadcast_error)}")
+
+        except Exception as e:
+            logger.error(f"Error updating job for client download: {str(e)}")
+
+    async def resume_video_extraction(
+        self,
+        user_id: str,
+        job_id: str,
+        video_path: str
+    ) -> Dict[str, Any]:
+        """
+        Resume video extraction after client uploads the video.
+
+        This is called after the mobile client downloads and uploads the video
+        for platforms requiring client-side download (e.g., Instagram).
+
+        Args:
+            user_id: User ID performing the extraction
+            job_id: Extraction job ID
+            video_path: Path to uploaded video in temp storage
+
+        Returns:
+            Dict with job_id, status, recipe_id
+        """
+        try:
+            # Get job and verify state
+            job = await self.get_job_status(job_id)
+            if not job:
+                raise ValueError("Job not found")
+
+            if job["status"] != ExtractionStatus.NEEDS_CLIENT_DOWNLOAD.value:
+                raise ValueError(f"Invalid job state: {job['status']}")
+
+            if job["user_id"] != user_id:
+                raise ValueError("You don't have permission to resume this job")
+
+            # Get stored metadata
+            import json
+            video_metadata = {}
+            if job.get("video_metadata"):
+                video_metadata = (
+                    json.loads(job["video_metadata"])
+                    if isinstance(job["video_metadata"], str)
+                    else job["video_metadata"]
+                )
+
+            # Update job status to processing (resume starts at 50% after client upload)
+            await self._update_job_status(
+                job_id,
+                ExtractionStatus.PROCESSING,
+                50,
+                ExtractionStep.VIDEO_EXTRACTING_AUDIO
+            )
+
+            # Store temp video path for cleanup tracking
+            await asyncio.to_thread(
+                lambda: self.supabase.table("extraction_jobs")
+                    .update({"temp_video_path": video_path})
+                    .eq("id", job_id)
+                    .execute()
+            )
+
+            # Get full local path (video is already on local filesystem)
+            from app.services.upload_service import UploadService, TEMP_VIDEO_DIR
+            import os
+            upload_service = UploadService(self.supabase)
+            local_path = os.path.join(TEMP_VIDEO_DIR, video_path)
+
+            # Create progress callback
+            def sync_progress_callback(percentage: int, step: str):
+                """Progress callback that scales 0-100% to 50-70% range"""
+                scaled_percentage = 50 + int(percentage * 0.2)
+                asyncio.create_task(self._update_job_status(
+                    job_id,
+                    ExtractionStatus.PROCESSING,
+                    scaled_percentage,
+                    step
+                ))
+
+            # Process video using VideoExtractor
+            video_extractor = VideoExtractor(sync_progress_callback)
+            raw_content = await video_extractor.extract_from_file(
+                local_path,
+                metadata=video_metadata
+            )
+
+            # Delete temp video from local filesystem
+            try:
+                await upload_service.delete_local_video(video_path)
+                # Clear temp_video_path in job
+                await asyncio.to_thread(
+                    lambda: self.supabase.table("extraction_jobs")
+                        .update({"temp_video_path": None})
+                        .eq("id", job_id)
+                        .execute()
+                )
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to cleanup temp video: {cleanup_error}")
+
+            # Step 2: Normalize recipe
+            await self._update_job_status(
+                job_id,
+                ExtractionStatus.PROCESSING,
+                70,
+                ExtractionStep.NORMALIZING
+            )
+
+            normalized_data = await self.gemini_service.normalize_recipe(
+                raw_content["text"],
+                "video"
+            )
+
+            # Step 3: Prepare extraction data
+            await self._update_job_status(
+                job_id,
+                ExtractionStatus.PROCESSING,
+                75,
+                ExtractionStep.PREPARING
+            )
+
+            source_url = job.get("source_url")
+            initial_image_url = raw_content.get("thumbnail_url")
+
+            extraction_data = {
+                "title": normalized_data["title"],
+                "description": normalized_data.get("description"),
+                "ingredients": normalized_data.get("ingredients", []),
+                "instructions": normalized_data.get("instructions", []),
+                "servings": normalized_data.get("servings"),
+                "difficulty": normalized_data.get("difficulty"),
+                "tags": normalized_data.get("tags", []),
+                "categories": normalized_data.get("categories", []),
+                "prep_time_minutes": normalized_data.get("prep_time_minutes"),
+                "cook_time_minutes": normalized_data.get("cook_time_minutes"),
+                "total_time_minutes": normalized_data.get("total_time_minutes"),
+                "source_url": source_url,
+                "image_url": initial_image_url,
+            }
+
+            # Build video metadata
+            video_meta_for_save = self._build_video_metadata(raw_content, source_url)
+
+            # Step 4: Create draft recipe
+            await self._update_job_status(
+                job_id,
+                ExtractionStatus.PROCESSING,
+                90,
+                ExtractionStep.SAVING
+            )
+
+            result = await self.recipe_save_service.create_draft_recipe(
+                user_id=user_id,
+                source_type=SourceType.LINK,
+                extracted_data=extraction_data,
+                video_metadata=video_meta_for_save,
+                source_url=source_url,
+                job_id=job_id
+            )
+
+            recipe_id = result["recipe_id"]
+
+            # Update job status to completed
+            await self._update_job_status(
+                job_id,
+                ExtractionStatus.COMPLETED,
+                100,
+                ExtractionStep.COMPLETE,
+                recipe_id=recipe_id
+            )
+
+            logger.info(f"Successfully resumed and completed extraction for job {job_id}, recipe {recipe_id}")
+
+            return {
+                "job_id": job_id,
+                "status": "completed",
+                "recipe_id": recipe_id
+            }
+
+        except Exception as e:
+            logger.error(f"Error resuming video extraction: {str(e)}")
+            await self._update_job_status(
+                job_id,
+                ExtractionStatus.FAILED,
+                0,
+                ExtractionStep.STARTING,
+                error_message=str(e)
+            )
+            raise
 

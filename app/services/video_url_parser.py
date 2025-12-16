@@ -246,3 +246,25 @@ class VideoURLParser:
             return VideoPlatform(platform_lower)
         except ValueError:
             return None
+
+    @classmethod
+    def requires_client_download(cls, url: str) -> bool:
+        """
+        Check if this platform requires client-side video download.
+
+        Currently only Instagram requires this due to server-side blocking
+        (login requirements, rate limiting on datacenter IPs).
+
+        This method is designed to be easily extended to other platforms
+        if they start blocking server-side downloads.
+
+        Args:
+            url: The video URL to check
+
+        Returns:
+            True if the platform requires client-side download
+        """
+        platform = cls.get_platform(url)
+        # Currently only Instagram requires client-side download
+        # Add other platforms here if needed in the future
+        return platform == VideoPlatform.INSTAGRAM
