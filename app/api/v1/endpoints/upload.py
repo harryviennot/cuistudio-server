@@ -8,10 +8,11 @@ import logging
 
 from app.core.database import get_supabase_admin_client
 from app.core.security import get_current_user
-from app.services.upload_service import UploadService, ALLOWED_BUCKETS, DEFAULT_STORAGE_BUCKET
+from app.services.upload_service import UploadService, ALLOWED_BUCKETS, DEFAULT_STORAGE_BUCKET, MAX_VIDEO_SIZE_MB
 from app.api.v1.schemas.upload import (
     ImageUploadResponse,
     MultipleImageUploadResponse,
+    VideoUploadResponse,
     MAX_IMAGES_PER_EXTRACTION,
 )
 
@@ -215,4 +216,87 @@ async def upload_images(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while uploading images"
+        )
+
+
+# ============================================================================
+# VIDEO UPLOAD (for Instagram client-side download)
+# ============================================================================
+
+@router.post(
+    "/video",
+    response_model=VideoUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload Video for Extraction",
+    description="Upload a video file for recipe extraction (used for Instagram client-side downloads)",
+    responses={
+        201: {
+            "description": "Video uploaded successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "path": "job-id/uuid.mp4",
+                        "size": 52428800,
+                        "content_type": "video/mp4"
+                    }
+                }
+            }
+        },
+        400: {"description": "Invalid file type or missing job_id"},
+        401: {"description": "Not authenticated"},
+        413: {"description": "Video too large"}
+    }
+)
+async def upload_video(
+    file: UploadFile = File(..., description="Video file to upload (mp4, mov)"),
+    job_id: str = Form(..., description="Extraction job ID"),
+    current_user: dict = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """
+    ## Upload Video for Extraction
+
+    Uploads a video file to server's local filesystem for recipe extraction.
+    Used when the mobile client downloads an Instagram video and uploads it for processing.
+
+    **Allowed File Types:**
+    - video/mp4 (.mp4)
+    - video/quicktime (.mov)
+    - video/x-m4v (.m4v)
+
+    **File Size Limit:** 500MB
+
+    **Storage:**
+    - Videos are stored locally on the server (temp/videos/)
+    - Videos are automatically deleted after extraction
+    - Orphaned videos are cleaned up every hour (2 hour TTL)
+
+    **Workflow:**
+    1. Mobile app receives `needs_client_download` status from extraction
+    2. Mobile app downloads video from Instagram using user's IP
+    3. Mobile app uploads video using this endpoint
+    4. Mobile app calls `POST /extraction/jobs/{job_id}/resume` to continue extraction
+
+    **Authentication:**
+    - Requires valid JWT access token (Bearer token)
+    - User must own the extraction job
+    """
+    if not job_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="job_id is required"
+        )
+
+    upload_service = UploadService(supabase)
+
+    try:
+        result = await upload_service.save_video_locally(file, job_id)
+        return VideoUploadResponse(**result)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error uploading video: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while uploading the video"
         )

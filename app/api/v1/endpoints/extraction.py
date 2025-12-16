@@ -257,6 +257,73 @@ async def cancel_extraction_job(
         )
 
 
+@router.post("/jobs/{job_id}/resume", response_model=ExtractionJobResponse)
+async def resume_extraction_job(
+    job_id: str,
+    video_path: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_authenticated_user),
+    admin_client: Client = Depends(get_supabase_admin_client)
+):
+    """
+    Resume extraction after client video upload.
+
+    Called after the mobile client:
+    1. Received `needs_client_download` status
+    2. Downloaded the video from Instagram using their IP
+    3. Uploaded the video via `POST /upload/video`
+
+    This endpoint triggers the remaining extraction steps (audio extraction,
+    transcription, normalization, recipe creation).
+
+    **Required state:** Job must be in `needs_client_download` status.
+    """
+    try:
+        extraction_service = ExtractionService(admin_client)
+
+        # Verify job exists and is in correct state
+        job = await extraction_service.get_job_status(job_id)
+
+        if not job:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Job not found"
+            )
+
+        if job["user_id"] != current_user["id"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have access to this job"
+            )
+
+        if job["status"] != ExtractionStatus.NEEDS_CLIENT_DOWNLOAD.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid job state: {job['status']}. Expected: needs_client_download"
+            )
+
+        # Run resume in background
+        background_tasks.add_task(
+            extraction_service.resume_video_extraction,
+            current_user["id"],
+            job_id,
+            video_path
+        )
+
+        # Return current job status (will be updated by background task)
+        return ExtractionJobResponse(**job)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resuming extraction job: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to resume extraction: {str(e)}"
+        )
+
+
 @router.get("/jobs/{job_id}/stream")
 async def stream_extraction_job(
     job_id: str,
@@ -304,7 +371,7 @@ async def stream_extraction_job(
         async def event_stream():
             """Generate Server-Sent Events for job updates"""
             try:
-                # Send initial state immediately
+                # Send initial state immediately (include ALL relevant fields)
                 initial_data = {
                     "id": job["id"],
                     "status": job["status"],
@@ -312,7 +379,9 @@ async def stream_extraction_job(
                     "current_step": job.get("current_step", ""),
                     "recipe_id": job.get("recipe_id"),
                     "existing_recipe_id": job.get("existing_recipe_id"),
-                    "error_message": job.get("error_message")
+                    "error_message": job.get("error_message"),
+                    "video_download_url": job.get("video_download_url"),
+                    "video_metadata": job.get("video_metadata"),
                 }
                 yield {
                     "event": "job_update",
@@ -323,8 +392,14 @@ async def stream_extraction_job(
                 await asyncio.sleep(0.1)
                 yield {"comment": "connected"}
 
-                # If job is already complete, close immediately
-                if job["status"] in [ExtractionStatus.COMPLETED.value, ExtractionStatus.FAILED.value]:
+                # If job is already in terminal state, close immediately after sending initial state
+                # Include needs_client_download since client will handle download separately
+                terminal_statuses = [
+                    ExtractionStatus.COMPLETED.value,
+                    ExtractionStatus.FAILED.value,
+                    ExtractionStatus.NEEDS_CLIENT_DOWNLOAD.value,
+                ]
+                if job["status"] in terminal_statuses:
                     logger.info(f"Job {job_id} already {job['status']}, closing SSE connection")
                     return
 
@@ -350,8 +425,8 @@ async def stream_extraction_job(
                                 "data": json.dumps(event_data)
                             }
 
-                            # Close connection if job is complete
-                            if event_data.get("status") in [ExtractionStatus.COMPLETED.value, ExtractionStatus.FAILED.value]:
+                            # Close connection if job is in terminal state
+                            if event_data.get("status") in terminal_statuses:
                                 logger.info(f"Job {job_id} {event_data['status']}, closing SSE connection")
                                 break
 

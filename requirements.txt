@@ -50,6 +50,9 @@ lxml>=5.0.0
 python-slugify>=8.0.1
 aiofiles>=23.0.0
 
+# Task scheduling
+apscheduler>=3.10.0
+
 # Server-Sent Events
 sse-starlette>=1.6.5
 

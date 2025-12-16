@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     # File Upload
     MAX_UPLOAD_SIZE_MB: int = 50
 
+    # Temp Video Storage (for Instagram client-side downloads)
+    TEMP_VIDEO_DIR: str = "temp/videos"
+    TEMP_VIDEO_MAX_AGE_HOURS: int = 2
+    TEMP_VIDEO_CLEANUP_INTERVAL_HOURS: int = 1
+
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 60
     EXTRACTION_RATE_LIMIT_PER_MINUTE: int = 10  # Stricter limit for heavy extraction operations

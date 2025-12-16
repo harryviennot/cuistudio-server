@@ -272,3 +272,148 @@ Transcript:
         except Exception as e:
             logger.error(f"Error transcribing audio: {str(e)}")
             return ""
+
+    async def extract_video_url(self, url: str) -> Dict[str, Any]:
+        """
+        Extract direct video URL and metadata WITHOUT downloading.
+
+        Used for platforms requiring client-side download (e.g., Instagram).
+        The server extracts the direct MP4 URL using yt-dlp, and the client
+        downloads the video using their own IP to bypass platform blocking.
+
+        Args:
+            url: Video URL (Instagram reel, etc.)
+
+        Returns:
+            Dict containing:
+                - video_url: Direct MP4 URL for client to download
+                - thumbnail_url: Thumbnail image URL
+                - description: Video description
+                - platform: Platform name
+                - Other metadata (title, duration, uploader, etc.)
+        """
+        def _sync_extract_info():
+            """Synchronous info extraction - runs in thread pool"""
+            ydl_opts = {
+                'format': 'best',
+                'quiet': True,
+                'skip_download': True,  # Don't download, just extract info
+                'no_warnings': True,
+            }
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+
+                # Get the direct video URL
+                video_url = info.get('url')
+
+                # If not directly available, get from formats
+                if not video_url and info.get('formats'):
+                    # Get best format with direct URL
+                    for f in reversed(info['formats']):
+                        if f.get('url') and f.get('ext') in ['mp4', 'webm', 'mov']:
+                            video_url = f['url']
+                            break
+
+                if not video_url:
+                    raise ValueError("Could not extract direct video URL")
+
+                return {
+                    "video_url": video_url,
+                    "thumbnail_url": self._get_best_thumbnail(info),
+                    "description": info.get("description", ""),
+                    "title": info.get("title"),
+                    "duration": info.get("duration"),
+                    "view_count": info.get("view_count"),
+                    "like_count": info.get("like_count"),
+                    "upload_date": info.get("upload_date"),
+                    "uploader": info.get("uploader"),
+                    "uploader_id": info.get("uploader_id"),
+                    "channel": info.get("channel"),
+                    "channel_url": info.get("channel_url"),
+                    "platform": info.get("extractor", "").lower(),
+                    "webpage_url": info.get("webpage_url"),
+                }
+
+        try:
+            self.update_progress(10, ExtractionStep.VIDEO_DOWNLOADING)
+            result = await asyncio.to_thread(_sync_extract_info)
+            logger.info(
+                f"Extracted video URL for client download: {result.get('title', 'Unknown')} "
+                f"from {result.get('platform', 'unknown')}"
+            )
+            return result
+        except Exception as e:
+            logger.error(f"Error extracting video URL: {str(e)}")
+            raise
+
+    async def extract_from_file(
+        self,
+        file_path: str,
+        metadata: Dict[str, Any] | None = None
+    ) -> Dict[str, Any]:
+        """
+        Extract recipe content from a local video file.
+
+        Used after the client uploads a video that was downloaded client-side.
+        Processes the video file (audio extraction, transcription) and combines
+        with previously extracted metadata.
+
+        Args:
+            file_path: Path to local video file
+            metadata: Optional metadata from previous extract_video_url() call
+
+        Returns:
+            Dict containing transcript, description, and combined text
+        """
+        metadata = metadata or {}
+
+        try:
+            # Track file for cleanup
+            self._track_temp_file(file_path)
+
+            self.update_progress(30, ExtractionStep.VIDEO_EXTRACTING_AUDIO)
+            audio_path = await self._extract_audio(file_path)
+            self._track_temp_file(audio_path)
+
+            self.update_progress(50, ExtractionStep.VIDEO_TRANSCRIBING)
+            transcript = await self._transcribe_audio(audio_path)
+
+            self.update_progress(90, ExtractionStep.VIDEO_COMBINING)
+
+            # Get description from metadata or empty string
+            description = metadata.get("description", "")
+
+            # Combine transcript and description
+            combined_text = f"""Video Description: {description}
+
+Transcript:
+{transcript}"""
+
+            self.update_progress(100, ExtractionStep.COMPLETE)
+
+            return {
+                "text": combined_text.strip(),
+                "transcript": transcript,
+                "description": description,
+                "video_path": file_path,
+                # Include metadata from URL extraction
+                "video_title": metadata.get("title"),
+                "thumbnail_url": metadata.get("thumbnail_url"),
+                "webpage_url": metadata.get("webpage_url"),
+                "duration": metadata.get("duration"),
+                "view_count": metadata.get("view_count"),
+                "like_count": metadata.get("like_count"),
+                "upload_date": metadata.get("upload_date"),
+                "uploader": metadata.get("uploader"),
+                "uploader_id": metadata.get("uploader_id"),
+                "channel": metadata.get("channel"),
+                "channel_url": metadata.get("channel_url"),
+            }
+
+        except Exception as e:
+            logger.error(f"Error extracting from video file: {str(e)}")
+            raise
+        finally:
+            # Always cleanup temp files, even on error
+            self._cleanup_temp_files()

@@ -19,15 +19,30 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
+    settings = get_settings()
+
     # Startup
     setup_logging()
     logger.info("Initializing event broadcaster...")
     await init_event_broadcaster()
+
+    # Start temp video cleanup scheduler
+    from app.core.cleanup import start_cleanup_scheduler
+    cleanup_scheduler = start_cleanup_scheduler(
+        temp_dir=settings.TEMP_VIDEO_DIR,
+        max_age_hours=settings.TEMP_VIDEO_MAX_AGE_HOURS,
+        interval_hours=settings.TEMP_VIDEO_CLEANUP_INTERVAL_HOURS
+    )
+
     logger.info("Application startup complete")
 
     yield
 
     # Shutdown
+    if cleanup_scheduler:
+        cleanup_scheduler.shutdown(wait=False)
+        logger.info("Cleanup scheduler stopped")
+
     logger.info("Shutting down event broadcaster...")
     await shutdown_event_broadcaster()
     logger.info("Application shutdown complete")

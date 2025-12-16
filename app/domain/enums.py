@@ -29,6 +29,7 @@ class ExtractionStatus(str, Enum):
     CANCELLED = "cancelled"
     NOT_A_RECIPE = "not_a_recipe"  # Content doesn't contain a recipe
     WEBSITE_BLOCKED = "website_blocked"  # Website blocks automated extraction
+    NEEDS_CLIENT_DOWNLOAD = "needs_client_download"  # Client needs to download video (Instagram)
 
 
 class PermissionLevel(str, Enum):
