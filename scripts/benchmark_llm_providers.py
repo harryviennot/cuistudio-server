@@ -22,7 +22,7 @@ import json
 import os
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -890,7 +890,7 @@ async def main():
         f.write(md_report)
 
     print(f"Recipe comparison saved to: {md_file}")
-    print(f"\nOpen the markdown file to compare recipe quality across models!")
+    print("\nOpen the markdown file to compare recipe quality across models!")
 
 
 if __name__ == "__main__":

@@ -554,7 +554,6 @@ class UploadService:
             True if deletion was successful
         """
         import os
-        import shutil
 
         try:
             full_path = os.path.join(TEMP_VIDEO_DIR, relative_path)

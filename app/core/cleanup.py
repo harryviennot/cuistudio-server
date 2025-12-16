@@ -4,7 +4,6 @@ Cleanup service for temporary files.
 Handles automatic cleanup of orphaned temp videos that weren't properly
 deleted after extraction (e.g., due to errors or abandoned jobs).
 """
-import os
 import time
 import logging
 from pathlib import Path

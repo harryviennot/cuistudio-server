@@ -53,7 +53,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.services.openai_service import OpenAIService
 from app.services.extractors.photo_extractor import PhotoExtractor
-from app.services.extractors.video_extractor import VideoExtractor, get_whisper_model
+from app.services.extractors.video_extractor import VideoExtractor
 from app.core.config import get_settings
 
 # Configure logging
@@ -697,7 +697,7 @@ async def run_video_benchmarks(
                 if result.quality:
                     print(f"    Quality: {result.quality.ingredient_count} ingredients, {result.quality.instruction_count} steps")
                 # Print step breakdown
-                print(f"    Steps:")
+                print("    Steps:")
                 for step in result.step_timings:
                     print(f"      - {step.step_name}: {step.duration_seconds:.2f}s")
             else:
@@ -722,7 +722,7 @@ async def run_photo_benchmarks(
         print(f"{'='*60}")
 
         if not os.path.exists(path):
-            print(f"  SKIP: File not found")
+            print("  SKIP: File not found")
             continue
 
         results[path] = {}
@@ -739,7 +739,7 @@ async def run_photo_benchmarks(
                 if result.quality:
                     print(f"    Quality: {result.quality.ingredient_count} ingredients, {result.quality.instruction_count} steps")
                 # Print step breakdown
-                print(f"    Steps:")
+                print("    Steps:")
                 for step in result.step_timings:
                     print(f"      - {step.step_name}: {step.duration_seconds:.2f}s")
             else:
@@ -836,7 +836,7 @@ def generate_markdown_report(
                     cost = "N/A"
                     ingredients = "N/A"
                     steps = "N/A"
-                    status = f"FAILED"
+                    status = "FAILED"
 
                 lines.append(f"| {name} | {result.total_time_seconds:.2f}s | {tokens} | {cost} | {ingredients} | {steps} | {status} |")
 
@@ -873,7 +873,7 @@ def generate_markdown_report(
                     cost = "N/A"
                     ingredients = "N/A"
                     steps = "N/A"
-                    status = f"FAILED"
+                    status = "FAILED"
 
                 lines.append(f"| {name} | {result.total_time_seconds:.2f}s | {tokens} | {cost} | {ingredients} | {steps} | {status} |")
 

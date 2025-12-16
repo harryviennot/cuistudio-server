@@ -13,7 +13,6 @@ Usage:
     python scripts/compare_ocr_engines.py
 """
 
-import asyncio
 import sys
 import time
 from pathlib import Path

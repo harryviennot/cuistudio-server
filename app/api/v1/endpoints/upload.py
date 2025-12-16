@@ -8,7 +8,7 @@ import logging
 
 from app.core.database import get_supabase_admin_client
 from app.core.security import get_current_user
-from app.services.upload_service import UploadService, ALLOWED_BUCKETS, DEFAULT_STORAGE_BUCKET, MAX_VIDEO_SIZE_MB
+from app.services.upload_service import UploadService, ALLOWED_BUCKETS, DEFAULT_STORAGE_BUCKET
 from app.api.v1.schemas.upload import (
     ImageUploadResponse,
     MultipleImageUploadResponse,
