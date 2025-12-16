@@ -76,7 +76,7 @@ class ExtractionService:
             # Scale extractor progress (0-100%) to 0-50% range so service steps can use 50-100%
             def sync_progress_callback(percentage: int, step: str):
                 """Synchronous wrapper for progress updates with scaling"""
-                scaled_percentage = int(percentage * 0.5)
+                scaled_percentage = int(percentage * 0.7)  # Scale 0-100% to 0-70%
                 if progress_callback:
                     progress_callback(scaled_percentage, step)
                 if job_id:
@@ -103,41 +103,41 @@ class ExtractionService:
                     await self._update_job_status(
                         job_id,
                         ExtractionStatus.PROCESSING,
-                        55,
+                        70,
                         ExtractionStep.NORMALIZING
                     )
                 elif progress_callback:
                     # Only use progress_callback if no job_id (backward compatibility)
-                    progress_callback(55, ExtractionStep.NORMALIZING)
+                    progress_callback(70, ExtractionStep.NORMALIZING)
             else:
                 # Other extractors return raw text that needs normalization
                 if job_id:
                     await self._update_job_status(
                         job_id,
                         ExtractionStatus.PROCESSING,
-                        55,
+                        70,
                         ExtractionStep.NORMALIZING
                     )
                 elif progress_callback:
                     # Only use progress_callback if no job_id (backward compatibility)
-                    progress_callback(55, ExtractionStep.NORMALIZING)
+                    progress_callback(70, ExtractionStep.NORMALIZING)
 
                 normalized_data = await self.gemini_service.normalize_recipe(
                     raw_content["text"],
                     source_type.value
                 )
 
-            # Step 3: Prepare recipe for database (70% range)
+            # Step 3: Prepare recipe for database (75% range)
             if job_id:
                 await self._update_job_status(
                     job_id,
                     ExtractionStatus.PROCESSING,
-                    70,
+                    75,
                     ExtractionStep.PREPARING
                 )
             elif progress_callback:
                 # Only use progress_callback if no job_id (backward compatibility)
-                progress_callback(70, ExtractionStep.PREPARING)
+                progress_callback(75, ExtractionStep.PREPARING)
 
             # Get source URLs (could be single or multiple)
             # For backwards compatibility with non-photo sources
@@ -147,7 +147,7 @@ class ExtractionService:
             # Determine initial image_url (from extraction source)
             initial_image_url = source_urls[0] if source_urls else None
 
-            # Step 4: Generate AI image for non-webpage sources (75-85% range)
+            # Step 4: Generate AI image for non-webpage sources (80-90% range)
             # LINK sources with webpages already have images from scraping
             # Check if this is NOT a LINK type (which would be handled by LinkExtractor)
             if source_type != SourceType.LINK:
@@ -155,11 +155,11 @@ class ExtractionService:
                     await self._update_job_status(
                         job_id,
                         ExtractionStatus.PROCESSING,
-                        75,
+                        80,
                         ExtractionStep.GENERATING_IMAGE
                     )
                 elif progress_callback:
-                    progress_callback(75, ExtractionStep.GENERATING_IMAGE)
+                    progress_callback(80, ExtractionStep.GENERATING_IMAGE)
 
                 # Generate image synchronously (recipe_id will be auto-generated)
                 generated_image_url = await self.flux_service.generate_recipe_image(
@@ -273,6 +273,21 @@ class ExtractionService:
     ):
         """Update extraction job status"""
         try:
+            # Prevent progress from going backwards (except for error states)
+            if status not in [ExtractionStatus.FAILED, ExtractionStatus.CANCELLED]:
+                try:
+                    result = await asyncio.to_thread(
+                        lambda: self.supabase.table("extraction_jobs")
+                            .select("progress_percentage")
+                            .eq("id", job_id)
+                            .single()
+                            .execute()
+                    )
+                    current_progress = result.data.get("progress_percentage", 0) if result.data else 0
+                    progress = max(progress, current_progress)
+                except Exception:
+                    pass  # If fetch fails, proceed with original progress
+
             # Convert ExtractionStep enum to string value if needed
             step_value = step.value if isinstance(step, ExtractionStep) else step
 
@@ -551,7 +566,7 @@ class ExtractionService:
             def sync_progress_callback(percentage: int, step: str):
                 """Synchronous wrapper for progress updates with scaling"""
                 # Scale extractor's 0-100% to 0-50% range
-                scaled_percentage = int(percentage * 0.5)
+                scaled_percentage = int(percentage * 0.7)  # Scale 0-100% to 0-70%
                 if progress_callback:
                     progress_callback(scaled_percentage, step)
                 if job_id:
@@ -613,7 +628,7 @@ class ExtractionService:
                     await self._update_job_status(
                         job_id,
                         ExtractionStatus.PROCESSING,
-                        55,
+                        70,
                         ExtractionStep.NORMALIZING
                     )
             else:
@@ -632,7 +647,7 @@ class ExtractionService:
                     await self._update_job_status(
                         job_id,
                         ExtractionStatus.PROCESSING,
-                        55,
+                        70,
                         ExtractionStep.NORMALIZING
                     )
                 normalized_data = await self.gemini_service.normalize_recipe(
@@ -640,12 +655,12 @@ class ExtractionService:
                     source_type.value
                 )
 
-            # Step 3: Prepare extraction data (70% range)
+            # Step 3: Prepare extraction data (75% range)
             if job_id:
                 await self._update_job_status(
                     job_id,
                     ExtractionStatus.PROCESSING,
-                    70,
+                    75,
                     ExtractionStep.PREPARING
                 )
 
@@ -654,7 +669,7 @@ class ExtractionService:
             source_urls = raw_content.get("source_urls", [source_url] if source_url else [])
             initial_image_url = source_urls[0] if source_urls else None
 
-            # Step 4: Handle image based on source type (75-85% range)
+            # Step 4: Handle image based on source type (80-90% range)
             # For LINK type, check detected_type to determine handling
             detected_type = raw_content.get("detected_type")
             is_video_content = source_type == SourceType.VIDEO or detected_type == "video"
@@ -672,7 +687,7 @@ class ExtractionService:
                     await self._update_job_status(
                         job_id,
                         ExtractionStatus.PROCESSING,
-                        75,
+                        80,
                         ExtractionStep.GENERATING_IMAGE
                     )
 
@@ -991,7 +1006,7 @@ class ExtractionService:
         try:
             update_data = {
                 "status": ExtractionStatus.NEEDS_CLIENT_DOWNLOAD.value,
-                "progress_percentage": 25,
+                "progress_percentage": 10,  # Client download + upload will go 10-50%
                 "current_step": "Waiting for client download",
                 "video_download_url": video_download_url,
                 "video_metadata": video_metadata,  # Supabase handles JSONB serialization
@@ -1010,7 +1025,7 @@ class ExtractionService:
                 event_data = {
                     "id": job_id,
                     "status": ExtractionStatus.NEEDS_CLIENT_DOWNLOAD.value,
-                    "progress_percentage": 25,
+                    "progress_percentage": 10,  # Client download + upload will go 10-50%
                     "current_step": "Waiting for client download",
                     "video_download_url": video_download_url,
                     "video_metadata": video_metadata,
@@ -1065,11 +1080,11 @@ class ExtractionService:
                     else job["video_metadata"]
                 )
 
-            # Update job status to processing
+            # Update job status to processing (resume starts at 50% after client upload)
             await self._update_job_status(
                 job_id,
                 ExtractionStatus.PROCESSING,
-                30,
+                50,
                 ExtractionStep.VIDEO_EXTRACTING_AUDIO
             )
 
@@ -1089,8 +1104,8 @@ class ExtractionService:
 
             # Create progress callback
             def sync_progress_callback(percentage: int, step: str):
-                """Progress callback that scales 0-100% to 30-90% range"""
-                scaled_percentage = 30 + int(percentage * 0.6)
+                """Progress callback that scales 0-100% to 50-70% range"""
+                scaled_percentage = 50 + int(percentage * 0.2)
                 asyncio.create_task(self._update_job_status(
                     job_id,
                     ExtractionStatus.PROCESSING,
@@ -1122,7 +1137,7 @@ class ExtractionService:
             await self._update_job_status(
                 job_id,
                 ExtractionStatus.PROCESSING,
-                55,
+                70,
                 ExtractionStep.NORMALIZING
             )
 
@@ -1135,7 +1150,7 @@ class ExtractionService:
             await self._update_job_status(
                 job_id,
                 ExtractionStatus.PROCESSING,
-                70,
+                75,
                 ExtractionStep.PREPARING
             )
 
