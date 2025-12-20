@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = "INFO"
 
+    # Sentry
+    SENTRY_DSN: Optional[str] = None
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

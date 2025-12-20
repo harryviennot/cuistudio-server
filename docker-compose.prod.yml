@@ -40,6 +40,7 @@ services:
       - APP_ENV=production
       - REDIS_URL=redis://redis:6379/0
       - SITE_URL=${SITE_URL}
+      - SENTRY_DSN=${SENTRY_DSN}
       - UVICORN_WORKERS=2
     deploy:
       resources:
