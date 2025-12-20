@@ -642,6 +642,8 @@ async def update_user_recipe_data(
             update_data["custom_prep_time_minutes"] = data.custom_prep_time_minutes
         if data.custom_cook_time_minutes is not None:
             update_data["custom_cook_time_minutes"] = data.custom_cook_time_minutes
+        if data.custom_resting_time_minutes is not None:
+            update_data["custom_resting_time_minutes"] = data.custom_resting_time_minutes
         if data.custom_difficulty is not None:
             update_data["custom_difficulty"] = data.custom_difficulty.value
         if data.notes is not None:
@@ -916,10 +918,11 @@ async def _format_recipe_response(
 
     # Build timings
     timings = None
-    if recipe.get("prep_time_minutes") or recipe.get("cook_time_minutes"):
+    if recipe.get("prep_time_minutes") or recipe.get("cook_time_minutes") or recipe.get("resting_time_minutes"):
         timings = RecipeTimings(
             prep_time_minutes=recipe.get("prep_time_minutes"),
             cook_time_minutes=recipe.get("cook_time_minutes"),
+            resting_time_minutes=recipe.get("resting_time_minutes"),
             total_time_minutes=recipe.get("total_time_minutes")
         )
 
@@ -991,10 +994,11 @@ async def _format_list_item_response(
         is_favorite = user_recipe_data.get("is_favorite", False)
 
     timings = None
-    if recipe.get("prep_time_minutes") or recipe.get("cook_time_minutes"):
+    if recipe.get("prep_time_minutes") or recipe.get("cook_time_minutes") or recipe.get("resting_time_minutes"):
         timings = RecipeTimings(
             prep_time_minutes=recipe.get("prep_time_minutes"),
             cook_time_minutes=recipe.get("cook_time_minutes"),
+            resting_time_minutes=recipe.get("resting_time_minutes"),
             total_time_minutes=recipe.get("total_time_minutes")
         )
 
@@ -1055,7 +1059,8 @@ async def update_recipe_timings(
             recipe_id=recipe_id,
             user_id=current_user["id"],
             prep_time_minutes=data.prep_time_minutes,
-            cook_time_minutes=data.cook_time_minutes
+            cook_time_minutes=data.cook_time_minutes,
+            resting_time_minutes=data.resting_time_minutes
         )
 
         return RecipeTimingsUpdateResponse(**result)

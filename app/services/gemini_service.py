@@ -128,8 +128,14 @@ class GeminiService:
             "categories": data.get("categories", []),
             "prep_time_minutes": self._parse_time_minutes(data.get("prep_time_minutes")),
             "cook_time_minutes": self._parse_time_minutes(data.get("cook_time_minutes")),
-            "total_time_minutes": self._parse_time_minutes(data.get("total_time_minutes")),
+            "resting_time_minutes": self._parse_time_minutes(data.get("resting_time_minutes")),
         }
+
+        # Calculate total_time_minutes from the three timing fields
+        prep = normalized["prep_time_minutes"] or 0
+        cook = normalized["cook_time_minutes"] or 0
+        resting = normalized["resting_time_minutes"] or 0
+        normalized["total_time_minutes"] = prep + cook + resting if (prep or cook or resting) else None
 
         # Clean up ingredients: remove whitespace-only units and quantities
         if normalized["ingredients"]:
@@ -378,8 +384,15 @@ Response format:
     "categories": ["category1"],
     "prep_time_minutes": 15,
     "cook_time_minutes": 30,
-    "total_time_minutes": 45
-}"""
+    "resting_time_minutes": 0
+}
+
+TIMING DEFINITIONS:
+- prep_time_minutes: Active preparation time before cooking (chopping, mixing, measuring)
+- cook_time_minutes: Active cooking time (baking, frying, boiling, simmering)
+- resting_time_minutes: Passive waiting time where no active work is needed (marinating, rising dough, freezing, cooling, resting meat, chilling, proofing). This is NOT prep or cook time.
+
+NOTE: Do NOT include total_time_minutes - it will be calculated automatically."""
 
             user_prompt = f"""Parse this recipe from {source_type}:
 
@@ -532,8 +545,15 @@ Response format:
     "categories": ["category1"],
     "prep_time_minutes": 15,
     "cook_time_minutes": 30,
-    "total_time_minutes": 45
-}"""
+    "resting_time_minutes": 0
+}
+
+TIMING DEFINITIONS:
+- prep_time_minutes: Active preparation time before cooking (chopping, mixing, measuring)
+- cook_time_minutes: Active cooking time (baking, frying, boiling, simmering)
+- resting_time_minutes: Passive waiting time where no active work is needed (marinating, rising dough, freezing, cooling, resting meat, chilling, proofing). This is NOT prep or cook time.
+
+NOTE: Do NOT include total_time_minutes - it will be calculated automatically."""
 
             image_context = f"from {image_count} image(s)" if image_count > 1 else ""
             user_prompt = f"""Extract a recipe from this OCR text {image_context} (may contain OCR errors that need fixing):

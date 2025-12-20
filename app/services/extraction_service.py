@@ -185,6 +185,7 @@ class ExtractionService:
                 "categories": normalized_data.get("categories", []),
                 "prep_time_minutes": normalized_data.get("prep_time_minutes"),
                 "cook_time_minutes": normalized_data.get("cook_time_minutes"),
+                "resting_time_minutes": normalized_data.get("resting_time_minutes"),
                 "total_time_minutes": normalized_data.get("total_time_minutes"),
                 "source_type": source_type.value,
                 "source_url": source_url,  # Keep for backward compatibility
@@ -710,6 +711,7 @@ class ExtractionService:
                 "categories": normalized_data.get("categories", []),
                 "prep_time_minutes": normalized_data.get("prep_time_minutes"),
                 "cook_time_minutes": normalized_data.get("cook_time_minutes"),
+                "resting_time_minutes": normalized_data.get("resting_time_minutes"),
                 "total_time_minutes": normalized_data.get("total_time_minutes"),
                 "source_url": source_url,
                 "image_url": initial_image_url,
@@ -964,7 +966,13 @@ class ExtractionService:
         Returns:
             Video metadata dict
         """
+        # Try parsing source URL first, fall back to canonical URL from yt-dlp
+        # (short URLs like vm.tiktok.com don't parse directly but yt-dlp resolves them)
         parsed = VideoURLParser.parse(source_url)
+        if not parsed:
+            canonical_url = raw_content.get("webpage_url")
+            if canonical_url:
+                parsed = VideoURLParser.parse(canonical_url)
 
         metadata = {
             "platform": parsed.platform.value if parsed else None,
@@ -1168,6 +1176,7 @@ class ExtractionService:
                 "categories": normalized_data.get("categories", []),
                 "prep_time_minutes": normalized_data.get("prep_time_minutes"),
                 "cook_time_minutes": normalized_data.get("cook_time_minutes"),
+                "resting_time_minutes": normalized_data.get("resting_time_minutes"),
                 "total_time_minutes": normalized_data.get("total_time_minutes"),
                 "source_url": source_url,
                 "image_url": initial_image_url,

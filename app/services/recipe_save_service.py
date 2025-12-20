@@ -194,6 +194,7 @@ class RecipeSaveService:
                 "categories": extracted_data.get("categories", []),
                 "prep_time_minutes": extracted_data.get("prep_time_minutes"),
                 "cook_time_minutes": extracted_data.get("cook_time_minutes"),
+                "resting_time_minutes": extracted_data.get("resting_time_minutes"),
                 "total_time_minutes": extracted_data.get("total_time_minutes"),
                 "source_type": source_type.value,
                 "source_url": clean_source_url,
