@@ -25,7 +25,8 @@ class RecipeService:
         recipe_id: str,
         user_id: str,
         prep_time_minutes: Optional[int] = None,
-        cook_time_minutes: Optional[int] = None
+        cook_time_minutes: Optional[int] = None,
+        resting_time_minutes: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Smart timing update with ownership logic.
@@ -43,6 +44,7 @@ class RecipeService:
             user_id: Current user ID
             prep_time_minutes: Preparation time in minutes
             cook_time_minutes: Cooking time in minutes
+            resting_time_minutes: Resting/waiting time in minutes (marinating, rising, etc.)
 
         Returns:
             Dictionary with timing data and ownership indicator
@@ -62,17 +64,21 @@ class RecipeService:
                     update_data["prep_time_minutes"] = prep_time_minutes
                 if cook_time_minutes is not None:
                     update_data["cook_time_minutes"] = cook_time_minutes
+                if resting_time_minutes is not None:
+                    update_data["resting_time_minutes"] = resting_time_minutes
 
-                # Calculate total time
+                # Calculate total time (prep + cook + resting)
                 final_prep = prep_time_minutes if prep_time_minutes is not None else recipe.get("prep_time_minutes", 0)
                 final_cook = cook_time_minutes if cook_time_minutes is not None else recipe.get("cook_time_minutes", 0)
-                update_data["total_time_minutes"] = (final_prep or 0) + (final_cook or 0)
+                final_resting = resting_time_minutes if resting_time_minutes is not None else recipe.get("resting_time_minutes", 0)
+                update_data["total_time_minutes"] = (final_prep or 0) + (final_cook or 0) + (final_resting or 0)
 
                 updated_recipe = await self.recipe_repo.update(recipe_id, update_data)
 
                 return {
                     "prep_time_minutes": updated_recipe.get("prep_time_minutes"),
                     "cook_time_minutes": updated_recipe.get("cook_time_minutes"),
+                    "resting_time_minutes": updated_recipe.get("resting_time_minutes"),
                     "total_time_minutes": updated_recipe.get("total_time_minutes"),
                     "updated_base_recipe": True
                 }
@@ -83,6 +89,8 @@ class RecipeService:
                     update_data["custom_prep_time_minutes"] = prep_time_minutes
                 if cook_time_minutes is not None:
                     update_data["custom_cook_time_minutes"] = cook_time_minutes
+                if resting_time_minutes is not None:
+                    update_data["custom_resting_time_minutes"] = resting_time_minutes
 
                 user_data = await self.user_recipe_repo.upsert_user_data(
                     user_id,
@@ -93,11 +101,13 @@ class RecipeService:
                 # Calculate total from custom or base values
                 final_prep = user_data.get("custom_prep_time_minutes") or recipe.get("prep_time_minutes", 0)
                 final_cook = user_data.get("custom_cook_time_minutes") or recipe.get("cook_time_minutes", 0)
+                final_resting = user_data.get("custom_resting_time_minutes") or recipe.get("resting_time_minutes", 0)
 
                 return {
                     "prep_time_minutes": user_data.get("custom_prep_time_minutes") or recipe.get("prep_time_minutes"),
                     "cook_time_minutes": user_data.get("custom_cook_time_minutes") or recipe.get("cook_time_minutes"),
-                    "total_time_minutes": (final_prep or 0) + (final_cook or 0),
+                    "resting_time_minutes": user_data.get("custom_resting_time_minutes") or recipe.get("resting_time_minutes"),
+                    "total_time_minutes": (final_prep or 0) + (final_cook or 0) + (final_resting or 0),
                     "updated_base_recipe": False
                 }
 
