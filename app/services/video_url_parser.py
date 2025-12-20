@@ -1,6 +1,6 @@
 """
 Video URL Parser
-Parses video URLs from TikTok, YouTube Shorts, and Instagram Reels
+Parses video URLs from TikTok, YouTube Shorts, Instagram Reels, and Facebook
 to extract platform and video ID for duplicate detection.
 """
 
@@ -16,6 +16,7 @@ class VideoPlatform(str, Enum):
     TIKTOK = "tiktok"
     YOUTUBE = "youtube"
     INSTAGRAM = "instagram"
+    FACEBOOK = "facebook"
 
 
 @dataclass
@@ -52,6 +53,8 @@ TRACKING_PARAMS: Set[str] = {
     'si',
     'feature',
     'pp',
+    # Facebook tracking params
+    'mibextid',
     # Common tracking params
     'utm_content',
     'utm_term',
@@ -70,6 +73,7 @@ class VideoURLParser:
     - TikTok: tiktok.com/@user/video/123, vm.tiktok.com/ABC (short URLs)
     - YouTube Shorts: youtube.com/shorts/ABC, youtu.be/ABC
     - Instagram Reels: instagram.com/reel/ABC, instagram.com/p/ABC
+    - Facebook: facebook.com/share/r/ABC, facebook.com/reel/123, facebook.com/watch
     """
 
     # URL patterns for each platform
@@ -98,6 +102,16 @@ class VideoURLParser:
             r'instagram\.com/p/([A-Za-z0-9_-]+)',
             # Instagram TV: instagram.com/tv/CODE
             r'instagram\.com/tv/([A-Za-z0-9_-]+)',
+        ],
+        VideoPlatform.FACEBOOK: [
+            # Facebook Reel share: facebook.com/share/r/CODE
+            r'facebook\.com/share/r/([A-Za-z0-9_-]+)',
+            # Facebook Reel: facebook.com/reel/CODE
+            r'facebook\.com/reel/(\d+)',
+            # Facebook video: facebook.com/watch/?v=CODE
+            r'facebook\.com/watch/?\?v=(\d+)',
+            # Facebook video in user profile: facebook.com/user/videos/CODE
+            r'facebook\.com/[^/]+/videos/(\d+)',
         ],
     }
 
@@ -227,6 +241,8 @@ class VideoURLParser:
             return VideoPlatform.YOUTUBE
         elif 'instagram.com' in url_lower:
             return VideoPlatform.INSTAGRAM
+        elif 'facebook.com' in url_lower:
+            return VideoPlatform.FACEBOOK
 
         return None
 
@@ -246,3 +262,24 @@ class VideoURLParser:
             return VideoPlatform(platform_lower)
         except ValueError:
             return None
+
+    @classmethod
+    def requires_client_download(cls, url: str) -> bool:
+        """
+        Check if this platform requires client-side video download.
+
+        Currently only Instagram requires this due to server-side blocking
+        (login requirements, rate limiting on datacenter IPs).
+
+        This method is designed to be easily extended to other platforms
+        if they start blocking server-side downloads.
+
+        Args:
+            url: The video URL to check
+
+        Returns:
+            True if the platform requires client-side download
+        """
+        platform = cls.get_platform(url)
+        # Instagram and Facebook require client-side download due to login walls
+        return platform in (VideoPlatform.INSTAGRAM, VideoPlatform.FACEBOOK)

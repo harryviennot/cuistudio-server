@@ -5,6 +5,7 @@ import logging
 from typing import Dict, Any
 
 from app.services.extractors.base_extractor import BaseExtractor
+from app.domain.extraction_steps import ExtractionStep
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +24,12 @@ class PasteExtractor(BaseExtractor):
             Dict containing the text
         """
         try:
-            self.update_progress(50, "Processing pasted content")
+            self.update_progress(50, ExtractionStep.PASTE_PROCESSING)
 
             # For pasted text, we just need to clean it up a bit
             cleaned_text = source.strip()
 
-            self.update_progress(100, "Processing complete")
+            self.update_progress(100, ExtractionStep.COMPLETE)
 
             return {
                 "text": cleaned_text,

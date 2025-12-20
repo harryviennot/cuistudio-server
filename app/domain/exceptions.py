@@ -21,3 +21,16 @@ class WebsiteBlockedError(Exception):
         self.url = url
         self.message = message
         super().__init__(self.message)
+
+
+class InstagramBlockedError(Exception):
+    """
+    Raised when Instagram blocks yt-dlp URL extraction.
+    This typically happens due to rate limiting or login requirements.
+    The client should be prompted to download the video themselves.
+    """
+
+    def __init__(self, url: str, message: str = "Instagram is blocking our access"):
+        self.url = url
+        self.message = message
+        super().__init__(self.message)

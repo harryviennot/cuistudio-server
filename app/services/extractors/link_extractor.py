@@ -13,6 +13,8 @@ from bs4 import BeautifulSoup
 from app.services.extractors.base_extractor import BaseExtractor
 from app.services.extractors.video_extractor import VideoExtractor
 from app.services.video_url_parser import VideoURLParser
+from app.domain.extraction_steps import ExtractionStep
+from app.domain.exceptions import InstagramBlockedError
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +60,13 @@ class LinkExtractor(BaseExtractor):
 
     async def _extract_video(self, source: str, **kwargs) -> Dict[str, Any]:
         """
-        Delegate to VideoExtractor for video platform URLs.
+        Handle video platform URL extraction.
+
+        For platforms requiring client-side download (Instagram):
+            Extracts video URL only and signals client to download.
+
+        For other platforms (TikTok, YouTube):
+            Full server-side video extraction.
 
         Args:
             source: Video URL
@@ -69,11 +77,31 @@ class LinkExtractor(BaseExtractor):
         # Create VideoExtractor with our progress callback
         video_extractor = VideoExtractor(self.progress_callback)
 
-        # Extract video content
-        result = await video_extractor.extract(source, **kwargs)
+        # Check if this platform requires client-side download
+        if VideoURLParser.requires_client_download(source):
+            logger.info(f"Platform requires client-side download: {source}")
+            try:
+                # Only extract URL and metadata, don't download
+                result = await video_extractor.extract_video_url(source)
+                result["detected_type"] = "video"
+                result["needs_client_download"] = True
+                result["platform"] = VideoURLParser.get_platform(source).value
+                return result
+            except Exception as e:
+                # If yt-dlp fails to extract URL, Instagram is blocking us
+                error_msg = str(e).lower()
+                if "login" in error_msg or "rate" in error_msg or "blocked" in error_msg:
+                    raise InstagramBlockedError(
+                        url=source,
+                        message="Instagram is blocking our access. Please try again later."
+                    )
+                # Re-raise other errors
+                raise
 
-        # Mark the detected type
+        # For other platforms, use standard full extraction
+        result = await video_extractor.extract(source, **kwargs)
         result["detected_type"] = "video"
+        result["needs_client_download"] = False
 
         return result
 
@@ -88,7 +116,7 @@ class LinkExtractor(BaseExtractor):
             Dict containing text, schema, image_url, and detected_type='url'
         """
         try:
-            self.update_progress(10, "Fetching webpage")
+            self.update_progress(10, ExtractionStep.LINK_FETCHING)
 
             # Fetch the webpage using async httpx with realistic browser headers
             async with httpx.AsyncClient(timeout=URL_FETCH_TIMEOUT) as client:
@@ -121,24 +149,24 @@ class LinkExtractor(BaseExtractor):
 
                 response.raise_for_status()
 
-            self.update_progress(30, "Parsing HTML content")
+            self.update_progress(30, ExtractionStep.LINK_PARSING)
 
             # Parse HTML
             soup = BeautifulSoup(response.content, 'html.parser')
 
             # Extract recipe schema (JSON-LD)
-            self.update_progress(50, "Extracting recipe data")
+            self.update_progress(50, ExtractionStep.LINK_EXTRACTING)
             recipe_schema = self._extract_schema(soup)
 
             # Extract image URL
-            self.update_progress(60, "Finding recipe image")
+            self.update_progress(60, ExtractionStep.LINK_FINDING_IMAGE)
             image_url = self._extract_image(soup, recipe_schema, source)
 
             # Extract text content
-            self.update_progress(80, "Extracting text content")
+            self.update_progress(80, ExtractionStep.LINK_EXTRACTING_TEXT)
             text_content = self._extract_text(soup)
 
-            self.update_progress(100, "Extraction complete")
+            self.update_progress(100, ExtractionStep.COMPLETE)
 
             # Combine schema and text
             combined_text = ""

@@ -2,7 +2,7 @@
 Application configuration management
 """
 from functools import lru_cache
-from typing import List
+from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,10 +14,13 @@ class Settings(BaseSettings):
     SUPABASE_PUBLISHABLE_KEY: str
     SUPABASE_SECRET_KEY: str
 
-    # OpenAI
+    # OpenAI (kept for Whisper transcription)
     OPENAI_API_KEY: str
     OPENAI_ORGANIZATION_ID: str
     OPENAI_PROJECT_ID: str
+
+    # Google Gemini (for recipe extraction)
+    GOOGLE_API_KEY: Optional[str] = None
 
     # Application
     APP_ENV: str = "development"
@@ -39,6 +42,11 @@ class Settings(BaseSettings):
     # File Upload
     MAX_UPLOAD_SIZE_MB: int = 50
 
+    # Temp Video Storage (for Instagram client-side downloads)
+    TEMP_VIDEO_DIR: str = "temp/videos"
+    TEMP_VIDEO_MAX_AGE_HOURS: int = 2
+    TEMP_VIDEO_CLEANUP_INTERVAL_HOURS: int = 1
+
     # Rate Limiting
     RATE_LIMIT_PER_MINUTE: int = 60
     EXTRACTION_RATE_LIMIT_PER_MINUTE: int = 10  # Stricter limit for heavy extraction operations
@@ -51,6 +59,9 @@ class Settings(BaseSettings):
 
     # Logging
     LOG_LEVEL: str = "INFO"
+
+    # Sentry
+    SENTRY_DSN: Optional[str] = None
 
     model_config = SettingsConfigDict(
         env_file=".env",

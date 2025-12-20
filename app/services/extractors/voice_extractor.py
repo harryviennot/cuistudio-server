@@ -7,6 +7,7 @@ from openai import OpenAI
 
 from app.services.extractors.base_extractor import BaseExtractor
 from app.core.config import get_settings
+from app.domain.extraction_steps import ExtractionStep
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -30,12 +31,12 @@ class VoiceExtractor(BaseExtractor):
             Dict containing transcript
         """
         try:
-            self.update_progress(30, "Transcribing audio")
+            self.update_progress(30, ExtractionStep.VOICE_TRANSCRIBING)
 
             # Transcribe using OpenAI Whisper API
             transcript = await self._transcribe(source)
 
-            self.update_progress(100, "Transcription complete")
+            self.update_progress(100, ExtractionStep.COMPLETE)
 
             return {
                 "text": transcript,

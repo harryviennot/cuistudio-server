@@ -65,6 +65,9 @@ class ExtractionJobResponse(BaseModel):
     extracted_data: Optional[Dict[str, Any]] = Field(None, description="Extracted recipe data (before save)")
     video_metadata: Optional[Dict[str, Any]] = Field(None, description="Video-specific metadata")
     existing_recipe_id: Optional[str] = Field(None, description="Existing recipe ID if video was already extracted")
+    # Fields for client-side video download (Instagram)
+    video_download_url: Optional[str] = Field(None, description="Direct MP4 URL for client-side download (Instagram)")
+    temp_video_path: Optional[str] = Field(None, description="Path in temp storage for uploaded video")
     created_at: str
     updated_at: str
 

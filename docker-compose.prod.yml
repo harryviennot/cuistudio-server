@@ -9,7 +9,7 @@ services:
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -32,6 +32,7 @@ services:
       - OPENAI_ORGANIZATION_ID=${OPENAI_ORGANIZATION_ID}
       - OPENAI_PROJECT_ID=${OPENAI_PROJECT_ID}
       - BFL_API_KEY=${BFL_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - HOST=0.0.0.0
       - PORT=8000
       - DEBUG=false
@@ -39,6 +40,7 @@ services:
       - APP_ENV=production
       - REDIS_URL=redis://redis:6379/0
       - SITE_URL=${SITE_URL}
+      - SENTRY_DSN=${SENTRY_DSN}
       - UVICORN_WORKERS=2
     deploy:
       resources:
@@ -48,7 +50,7 @@ services:
       - tmp-data:/tmp/recipe-app
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      test: [ "CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')" ]
       interval: 300s
       timeout: 10s
       retries: 3
