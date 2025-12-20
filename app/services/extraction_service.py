@@ -964,7 +964,13 @@ class ExtractionService:
         Returns:
             Video metadata dict
         """
+        # Try parsing source URL first, fall back to canonical URL from yt-dlp
+        # (short URLs like vm.tiktok.com don't parse directly but yt-dlp resolves them)
         parsed = VideoURLParser.parse(source_url)
+        if not parsed:
+            canonical_url = raw_content.get("webpage_url")
+            if canonical_url:
+                parsed = VideoURLParser.parse(canonical_url)
 
         metadata = {
             "platform": parsed.platform.value if parsed else None,
