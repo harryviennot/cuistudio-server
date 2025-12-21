@@ -105,9 +105,4 @@ def create_app() -> FastAPI:
             "environment": settings.APP_ENV
         }
 
-    @app.get("/sentry-debug")
-    async def trigger_error():
-        """Test endpoint to verify Sentry is working - remove after testing"""
-        division_by_zero = 1 / 0
-
     return app
