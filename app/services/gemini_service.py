@@ -1,13 +1,20 @@
 """
 Gemini service for AI-powered recipe extraction and normalization.
-Uses Gemini 2.5 Flash Lite for fast, cost-effective recipe processing.
+Uses Gemini for text processing, Vision API for images, and audio transcription.
 Falls back to GPT-4o-mini if Gemini refuses due to copyright detection.
+
+Feature Flags:
+- gemini_3_text_extraction: Use gemini-3-flash-preview instead of gemini-2.5-flash-lite
+- gemini_audio_transcription: Use Gemini for audio transcription instead of Whisper
+- gemini_image_generation: Use Gemini for image generation instead of Flux
 """
 import asyncio
+import base64
 import json
 import logging
+import os
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Union
 
 import google.generativeai as genai
 from openai import OpenAI
@@ -27,16 +34,36 @@ class GeminiRecitationError(Exception):
 class GeminiService:
     """Service for Google Gemini API interactions for recipe extraction."""
 
-    # Model configuration
-    # gemini-2.5-flash-lite is fastest based on benchmarks
-    MODEL_NAME = "gemini-2.5-flash-lite"
-    OPENAI_MODEL = "gpt-4o-mini"  # Fallback model
+    # Model configuration - OLD models remain default
+    MODEL_TEXT_OLD = "gemini-2.5-flash-lite"       # Default text model
+    MODEL_TEXT_NEW = "gemini-3-flash-preview"      # Behind gemini_3_text_extraction flag
+    MODEL_AUDIO = "gemini-3-flash-preview"         # Behind gemini_audio_transcription flag
+    MODEL_IMAGE_GEN = "gemini-2.0-flash-exp"       # Behind gemini_image_generation flag
+    OPENAI_MODEL = "gpt-4o-mini"                   # Fallback model
+
+    # Alias for backward compatibility
+    MODEL_NAME = MODEL_TEXT_OLD
 
     # Pricing per 1M tokens (as of Dec 2024)
     PRICING = {
-        "gemini": {
+        "gemini-2.5-flash-lite": {
             "input": 0.075,   # $0.075 per 1M input tokens
             "output": 0.30,   # $0.30 per 1M output tokens
+        },
+        "gemini-3-flash-preview": {
+            "input": 0.50,    # $0.50 per 1M input tokens
+            "output": 3.00,   # $3.00 per 1M output tokens
+        },
+        "gemini-3-flash-preview-audio": {
+            "input": 1.00,    # $1.00 per 1M tokens for audio
+            "output": 3.00,
+        },
+        "gemini-2.0-flash-exp": {
+            "per_image": 0.039,  # Per generated image
+        },
+        "gemini": {
+            "input": 0.075,   # Default Gemini pricing
+            "output": 0.30,
         },
         "openai": {
             "input": 0.15,    # $0.15 per 1M input tokens
@@ -44,8 +71,13 @@ class GeminiService:
         }
     }
 
-    def __init__(self):
-        """Initialize Gemini service with API key from settings."""
+    def __init__(self, feature_flag_service=None):
+        """
+        Initialize Gemini service with API key from settings.
+
+        Args:
+            feature_flag_service: Optional FeatureFlagService for model selection
+        """
         api_key = settings.GOOGLE_API_KEY
         if not api_key:
             raise ValueError(
@@ -55,11 +87,29 @@ class GeminiService:
 
         genai.configure(api_key=api_key)
         self._genai = genai
+        self._feature_flags = feature_flag_service
 
         # Initialize OpenAI client for fallback
         self._openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
-        logger.info(f"GeminiService initialized with model: {self.MODEL_NAME} (fallback: {self.OPENAI_MODEL})")
+        logger.info(f"GeminiService initialized with models: text={self.MODEL_TEXT_OLD}, fallback={self.OPENAI_MODEL}")
+
+    async def _get_text_model_name(self) -> str:
+        """
+        Get the text model to use based on feature flag.
+
+        Returns:
+            Model name string
+        """
+        if self._feature_flags:
+            try:
+                use_new = await self._feature_flags.is_enabled("gemini_3_text_extraction")
+                if use_new:
+                    return self.MODEL_TEXT_NEW
+            except Exception as e:
+                logger.warning(f"Failed to check feature flag, using default model: {e}")
+
+        return self.MODEL_TEXT_OLD
 
     def _get_generation_config(self, temperature: float = 0.3, max_tokens: int = 4000):
         """Get generation config for Gemini API calls."""
@@ -627,4 +677,388 @@ Task:
                     ocr_text, system_prompt, image_count
                 )
             logger.error(f"Error extracting recipe from OCR with Gemini: {str(e)}")
+            raise
+
+    # ========================================
+    # NEW: Vision API Methods
+    # ========================================
+
+    async def extract_recipe_from_images(
+        self,
+        images: List[bytes],
+        context_description: str = "",
+        image_count: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Extract recipe from images using Gemini Vision API.
+
+        Used for:
+        - TikTok slideshows
+        - Instagram carousel posts
+        - Social media image posts with recipe content
+
+        Args:
+            images: List of image bytes
+            context_description: Description from the social media post
+            image_count: Number of images for stats (defaults to len(images))
+
+        Returns:
+            Structured recipe data
+
+        Raises:
+            NotARecipeError: If images don't contain a recipe
+        """
+        if not images:
+            raise ValueError("No images provided for Vision API extraction")
+
+        image_count = image_count or len(images)
+
+        try:
+            system_prompt = self._get_vision_system_prompt()
+
+            # Build content parts
+            content_parts = []
+
+            # Add context if available
+            if context_description:
+                content_parts.append(
+                    f"Post description (may contain recipe details):\n{context_description}\n\n"
+                )
+
+            content_parts.append(
+                "Analyze the following image(s) to extract a recipe. "
+                "The images may contain recipe cards, cooking instructions, "
+                "ingredient lists, or step-by-step cooking photos.\n\n"
+            )
+
+            # Add images
+            for i, img_bytes in enumerate(images):
+                # Detect MIME type from magic bytes
+                mime_type = self._detect_image_mime_type(img_bytes)
+                content_parts.append({
+                    "mime_type": mime_type,
+                    "data": base64.b64encode(img_bytes).decode("utf-8")
+                })
+                content_parts.append(f"\n[Image {i + 1} above]\n")
+
+            content_parts.append(
+                "\nExtract the recipe and return structured JSON. "
+                "Remember to preserve the original language."
+            )
+
+            # Get model name based on feature flag
+            model_name = await self._get_text_model_name()
+
+            # Create model
+            model = self._genai.GenerativeModel(
+                model_name=model_name,
+                generation_config=self._get_generation_config(),
+                system_instruction=system_prompt
+            )
+
+            def _generate():
+                return model.generate_content(content_parts)
+
+            response = await asyncio.to_thread(_generate)
+            result = json.loads(response.text)
+
+            # Check if content is a recipe
+            if not result.get("is_recipe", True):
+                rejection_reason = result.get("rejection_reason", "Images do not contain a recipe")
+                logger.info(f"Vision API: not a recipe - {rejection_reason}")
+                raise NotARecipeError(message=rejection_reason)
+
+            # Validate and structure
+            normalized = self._validate_and_structure(result)
+
+            # Calculate costs
+            # Text tokens
+            text_content = system_prompt + context_description
+            input_tokens = len(text_content) // 4
+            output_tokens = len(response.text) // 4
+
+            # Add image token estimate (~258 tokens per 1000px, assuming 1000x1000 avg)
+            image_tokens = image_count * 258
+            input_tokens += image_tokens
+
+            normalized["_extraction_stats"] = {
+                "model": model_name,
+                "provider": "gemini",
+                "method": "vision_api",
+                "image_count": image_count,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": input_tokens + output_tokens,
+                "estimated_cost_usd": self._calculate_cost(input_tokens, output_tokens, model_name)
+            }
+
+            logger.info(f"Vision API extracted recipe: {normalized.get('title', 'Unknown')}")
+            return normalized
+
+        except NotARecipeError:
+            raise
+        except Exception as e:
+            logger.error(f"Vision API extraction failed: {e}")
+            raise
+
+    def _get_vision_system_prompt(self) -> str:
+        """Get system prompt for Vision API recipe extraction."""
+        return """You are a professional recipe extraction expert with image analysis capabilities.
+
+IMPORTANT - LANGUAGE PRESERVATION:
+Extract the recipe in its ORIGINAL language. Do NOT translate.
+
+STEP 1 - IMAGE ANALYSIS:
+Analyze the provided images carefully for:
+- Recipe cards or printed recipes
+- Ingredient lists or nutritional labels
+- Step-by-step cooking photos
+- Handwritten recipes
+- Screenshot of recipes from apps/websites
+- Food with visible ingredients
+
+STEP 2 - CONTENT CLASSIFICATION:
+Determine if this content is actually a recipe. A recipe must contain:
+- Food/dish being prepared (visible or described)
+- At least some ingredients OR cooking/preparation instructions
+
+NOT recipes include:
+- Random food photos without recipe information
+- Restaurant/takeout photos
+- Food memes or non-instructional content
+
+STEP 3 - IF RECIPE, EXTRACT DATA:
+1. Extract ALL visible ingredients with quantities and units
+2. Extract all cooking instructions in order
+3. Group ingredients and instructions by recipe sections if applicable
+4. If text is partially visible or unclear, make reasonable inferences
+5. Return ONLY valid JSON, no markdown
+
+Response format:
+{
+    "is_recipe": true or false,
+    "rejection_reason": "Brief explanation if not a recipe",
+
+    "title": "Recipe name",
+    "description": "Brief description",
+    "language": "detected language code",
+    "ingredients": [
+        {"name": "ingredient", "quantity": 2.0, "unit": "cups", "notes": null, "group": null}
+    ],
+    "instructions": [
+        {"step_number": 1, "title": "Step title", "description": "Detailed instruction", "timer_minutes": null, "group": null}
+    ],
+    "servings": 4,
+    "difficulty": "easy|medium|hard",
+    "tags": [],
+    "categories": [],
+    "prep_time_minutes": null,
+    "cook_time_minutes": null,
+    "resting_time_minutes": null
+}"""
+
+    def _detect_image_mime_type(self, image_bytes: bytes) -> str:
+        """
+        Detect MIME type from image magic bytes.
+
+        Args:
+            image_bytes: Raw image bytes
+
+        Returns:
+            MIME type string
+        """
+        if image_bytes[:3] == b"\xff\xd8\xff":
+            return "image/jpeg"
+        elif image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
+            return "image/png"
+        elif image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+            return "image/webp"
+        elif image_bytes[:4] == b"GIF8":
+            return "image/gif"
+        else:
+            # Default to JPEG
+            return "image/jpeg"
+
+    # ========================================
+    # NEW: Audio Transcription Methods
+    # ========================================
+
+    async def transcribe_audio(
+        self,
+        audio_path: str,
+        prompt: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Transcribe audio using Gemini 3 Flash.
+
+        Only called when gemini_audio_transcription flag is enabled.
+
+        Args:
+            audio_path: Path to audio file (MP3, WAV, etc.)
+            prompt: Optional transcription guidance
+
+        Returns:
+            Dict with:
+                - text: Transcription text
+                - duration_seconds: Audio duration
+                - tokens: Token count
+                - cost: Estimated cost
+        """
+        try:
+            # Read audio file
+            with open(audio_path, "rb") as f:
+                audio_bytes = f.read()
+
+            # Get audio duration (rough estimate from file size)
+            # MP3: ~128kbps = 16KB/s, WAV: ~176.4KB/s (44.1kHz, 16-bit, stereo)
+            file_size = len(audio_bytes)
+            is_wav = audio_path.lower().endswith(".wav")
+            duration_seconds = file_size / (176400 if is_wav else 16000)
+
+            # Determine MIME type
+            mime_type = "audio/wav" if is_wav else "audio/mp3"
+
+            # Build prompt
+            transcription_prompt = prompt or "Transcribe this audio accurately. Include all spoken words."
+
+            # Create content parts
+            content_parts = [
+                transcription_prompt,
+                {
+                    "mime_type": mime_type,
+                    "data": base64.b64encode(audio_bytes).decode("utf-8")
+                }
+            ]
+
+            # Create model
+            model = self._genai.GenerativeModel(
+                model_name=self.MODEL_AUDIO,
+                generation_config=self._genai.GenerationConfig(
+                    temperature=0.1,  # Low temperature for accuracy
+                    max_output_tokens=8000
+                )
+            )
+
+            def _generate():
+                return model.generate_content(content_parts)
+
+            response = await asyncio.to_thread(_generate)
+            transcript = response.text.strip()
+
+            # Calculate tokens (~25 tokens per second of audio)
+            audio_tokens = int(duration_seconds * 25)
+            output_tokens = len(transcript) // 4
+
+            # Calculate cost using audio pricing
+            pricing = self.PRICING.get("gemini-3-flash-preview-audio", self.PRICING["gemini"])
+            cost = (audio_tokens / 1_000_000) * pricing["input"] + (output_tokens / 1_000_000) * pricing["output"]
+
+            logger.info(f"Gemini transcribed {duration_seconds:.1f}s audio, ~${cost:.4f}")
+
+            return {
+                "text": transcript,
+                "duration_seconds": duration_seconds,
+                "input_tokens": audio_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": audio_tokens + output_tokens,
+                "cost": cost,
+                "model": self.MODEL_AUDIO
+            }
+
+        except Exception as e:
+            logger.error(f"Gemini audio transcription failed: {e}")
+            raise
+
+    # ========================================
+    # NEW: Image Generation Methods
+    # ========================================
+
+    async def generate_recipe_image(
+        self,
+        recipe_data: Dict[str, Any],
+        user_id: str,
+        recipe_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate recipe image using Gemini image generation.
+
+        Only called when gemini_image_generation flag is enabled.
+
+        Args:
+            recipe_data: Dict containing recipe title, description, etc.
+            user_id: UUID of the user
+            recipe_id: Optional recipe ID
+
+        Returns:
+            Dict with:
+                - image_bytes: Raw image bytes
+                - cost: Estimated cost
+        """
+        try:
+            title = recipe_data.get("title", "delicious dish")
+            description = recipe_data.get("description", "")
+            ingredients = recipe_data.get("ingredients", [])
+            categories = recipe_data.get("categories", [])
+
+            # Build prompt
+            prompt = f"Professional food photography of {title}. "
+
+            if description:
+                prompt += f"{description}. "
+
+            # Add key ingredients
+            if ingredients:
+                ingredient_names = []
+                for ing in ingredients[:6]:
+                    if isinstance(ing, dict) and "name" in ing:
+                        ingredient_names.append(ing["name"])
+                if ingredient_names:
+                    prompt += f"Key ingredients: {', '.join(ingredient_names)}. "
+
+            if categories:
+                prompt += f"{', '.join(categories[:2])} cuisine. "
+
+            prompt += (
+                "Beautiful plating, soft natural lighting, shallow depth of field, "
+                "appetizing presentation, editorial recipe photography, photorealistic, "
+                "high detail, culinary magazine quality."
+            )
+
+            # Create model for image generation
+            model = self._genai.GenerativeModel(model_name=self.MODEL_IMAGE_GEN)
+
+            def _generate():
+                return model.generate_content(
+                    prompt,
+                    generation_config=self._genai.GenerationConfig(
+                        response_modalities=["image", "text"]
+                    )
+                )
+
+            response = await asyncio.to_thread(_generate)
+
+            # Extract image from response
+            image_bytes = None
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, "inline_data") and part.inline_data:
+                    image_bytes = part.inline_data.data
+                    break
+
+            if not image_bytes:
+                raise ValueError("No image generated in response")
+
+            # Calculate cost
+            pricing = self.PRICING.get(self.MODEL_IMAGE_GEN, {})
+            cost = pricing.get("per_image", 0.039)
+
+            logger.info(f"Gemini generated recipe image for '{title}', ~${cost:.4f}")
+
+            return {
+                "image_bytes": image_bytes,
+                "cost": cost,
+                "model": self.MODEL_IMAGE_GEN
+            }
+
+        except Exception as e:
+            logger.error(f"Gemini image generation failed: {e}")
             raise

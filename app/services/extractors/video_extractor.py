@@ -4,19 +4,22 @@ Video extractor for TikTok, Reels, YouTube Shorts
 Simplified extraction flow:
 1. Download video with yt-dlp (get metadata + thumbnail URL)
 2. Extract audio with MoviePy
-3. Transcribe audio with Whisper
+3. Transcribe audio with Whisper (or Gemini if feature flag enabled)
 4. Return transcript + description (no frame OCR)
 
 NOTE: All blocking operations (yt-dlp, whisper, moviepy)
 are wrapped in asyncio.to_thread() to prevent blocking the event loop.
 This allows SSE progress events to be sent in real-time.
+
+Feature Flags:
+- gemini_audio_transcription: Use Gemini 3 Flash for audio transcription instead of Whisper
 """
 import os
 import logging
 import asyncio
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 import yt_dlp
 import whisper
@@ -48,14 +51,35 @@ def get_whisper_model(model_name: str = "base"):
 class VideoExtractor(BaseExtractor):
     """Extract recipes from video URLs (TikTok, Reels, Shorts)"""
 
-    def __init__(self, progress_callback=None):
+    def __init__(
+        self,
+        progress_callback=None,
+        feature_flag_service=None,
+        gemini_service=None,
+        cost_tracker=None
+    ):
+        """
+        Initialize VideoExtractor.
+
+        Args:
+            progress_callback: Optional callback for progress updates
+            feature_flag_service: Optional FeatureFlagService for transcription method selection
+            gemini_service: Optional GeminiService for Gemini audio transcription
+            cost_tracker: Optional CostTrackerService for tracking costs
+        """
         super().__init__(progress_callback)
         self.download_dir = "temp/videos"
         os.makedirs(self.download_dir, exist_ok=True)
         # Track temp files for cleanup
         self._temp_files: List[Path] = []
+        # Feature flag and services for Gemini transcription
+        self._feature_flags = feature_flag_service
+        self._gemini = gemini_service
+        self._cost_tracker = cost_tracker
+        # Track extraction job ID for cost tracking
+        self._current_job_id: Optional[str] = None
 
-    def _get_best_thumbnail(self, info: dict) -> str | None:
+    def _get_best_thumbnail(self, info: dict) -> Optional[str]:
         """Get the best thumbnail URL, preferring creator-selected cover."""
         thumbnails = info.get("thumbnails", [])
 
@@ -87,7 +111,7 @@ class VideoExtractor(BaseExtractor):
         self._temp_files.clear()
         logger.info("Temp file cleanup completed")
 
-    async def extract(self, source: str, **kwargs) -> Dict[str, Any]:
+    async def extract(self, source: str, extraction_job_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
         """
         Extract recipe content from video URL.
 
@@ -98,10 +122,13 @@ class VideoExtractor(BaseExtractor):
 
         Args:
             source: Video URL (TikTok, Instagram, YouTube)
+            extraction_job_id: Optional job ID for cost tracking
 
         Returns:
             Dict containing transcript, description, video metadata, and thumbnail URL
         """
+        self._current_job_id = extraction_job_id
+
         try:
             self.update_progress(5, ExtractionStep.VIDEO_DOWNLOADING)
             video_path, video_metadata = await self._download_video(source)
@@ -113,8 +140,14 @@ class VideoExtractor(BaseExtractor):
             audio_path = await self._extract_audio(video_path)
             self._track_temp_file(audio_path)
 
-            self.update_progress(50, ExtractionStep.VIDEO_TRANSCRIBING)
-            transcript = await self._transcribe_audio(audio_path)
+            # Check feature flag for transcription method
+            use_gemini = await self._should_use_gemini_transcription()
+            if use_gemini:
+                self.update_progress(50, ExtractionStep.GEMINI_TRANSCRIBING)
+                transcript = await self._transcribe_audio_gemini(audio_path)
+            else:
+                self.update_progress(50, ExtractionStep.VIDEO_TRANSCRIBING)
+                transcript = await self._transcribe_audio_whisper(audio_path)
 
             self.update_progress(90, ExtractionStep.VIDEO_COMBINING)
 
@@ -257,8 +290,28 @@ Transcript:
             logger.error(f"Error extracting audio: {str(e)}")
             raise
 
-    async def _transcribe_audio(self, audio_path: str) -> str:
-        """Transcribe audio using OpenAI Whisper with cached model."""
+    async def _should_use_gemini_transcription(self) -> bool:
+        """
+        Check if Gemini transcription should be used based on feature flag.
+
+        Returns:
+            True if Gemini transcription is enabled and available
+        """
+        if not self._feature_flags:
+            return False
+
+        try:
+            return await self._feature_flags.is_enabled("gemini_audio_transcription")
+        except Exception as e:
+            logger.warning(f"Failed to check feature flag: {e}")
+            return False
+
+    async def _transcribe_audio_whisper(self, audio_path: str) -> str:
+        """
+        Transcribe audio using OpenAI Whisper with cached model.
+
+        This is the original/default transcription method.
+        """
         def _sync_transcribe():
             """Synchronous transcription - runs in thread pool (CPU-intensive)"""
             # Use cached Whisper model (loaded once per process)
@@ -268,10 +321,64 @@ Transcript:
             return result["text"]
 
         try:
-            return await asyncio.to_thread(_sync_transcribe)
+            transcript = await asyncio.to_thread(_sync_transcribe)
+
+            # Track cost (Whisper is free when run locally)
+            if self._cost_tracker and self._current_job_id:
+                await self._cost_tracker.record_cost(
+                    extraction_job_id=self._current_job_id,
+                    service_provider="whisper_local",
+                    service_type="transcription",
+                    model_name=settings.WHISPER_MODEL,
+                    estimated_cost_usd=0.0  # Local Whisper is free
+                )
+
+            return transcript
         except Exception as e:
-            logger.error(f"Error transcribing audio: {str(e)}")
+            logger.error(f"Error transcribing audio with Whisper: {str(e)}")
             return ""
+
+    async def _transcribe_audio_gemini(self, audio_path: str) -> str:
+        """
+        Transcribe audio using Gemini 3 Flash.
+
+        Used when gemini_audio_transcription feature flag is enabled.
+        """
+        try:
+            # Initialize GeminiService if not provided
+            if not self._gemini:
+                from app.services.gemini_service import GeminiService
+                self._gemini = GeminiService(feature_flag_service=self._feature_flags)
+
+            # Transcribe using Gemini
+            result = await self._gemini.transcribe_audio(
+                audio_path=audio_path,
+                prompt="Transcribe this audio accurately. Include all spoken words."
+            )
+
+            transcript = result.get("text", "")
+
+            # Track cost
+            if self._cost_tracker and self._current_job_id:
+                await self._cost_tracker.record_cost(
+                    extraction_job_id=self._current_job_id,
+                    service_provider="gemini",
+                    service_type="transcription",
+                    model_name=result.get("model", "gemini-3-flash-preview"),
+                    input_tokens=result.get("input_tokens"),
+                    output_tokens=result.get("output_tokens"),
+                    audio_seconds=result.get("duration_seconds"),
+                    estimated_cost_usd=result.get("cost")
+                )
+
+            logger.info(f"Gemini transcription completed: {len(transcript)} chars")
+            return transcript
+
+        except Exception as e:
+            logger.error(f"Error transcribing audio with Gemini: {str(e)}")
+            # Fall back to Whisper on Gemini failure
+            logger.info("Falling back to Whisper transcription")
+            return await self._transcribe_audio_whisper(audio_path)
 
     async def extract_video_url(self, url: str) -> Dict[str, Any]:
         """
@@ -350,7 +457,8 @@ Transcript:
     async def extract_from_file(
         self,
         file_path: str,
-        metadata: Dict[str, Any] | None = None
+        metadata: Optional[Dict[str, Any]] = None,
+        extraction_job_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Extract recipe content from a local video file.
@@ -362,11 +470,13 @@ Transcript:
         Args:
             file_path: Path to local video file
             metadata: Optional metadata from previous extract_video_url() call
+            extraction_job_id: Optional job ID for cost tracking
 
         Returns:
             Dict containing transcript, description, and combined text
         """
         metadata = metadata or {}
+        self._current_job_id = extraction_job_id
 
         try:
             # Track file for cleanup
@@ -376,8 +486,14 @@ Transcript:
             audio_path = await self._extract_audio(file_path)
             self._track_temp_file(audio_path)
 
-            self.update_progress(50, ExtractionStep.VIDEO_TRANSCRIBING)
-            transcript = await self._transcribe_audio(audio_path)
+            # Check feature flag for transcription method
+            use_gemini = await self._should_use_gemini_transcription()
+            if use_gemini:
+                self.update_progress(50, ExtractionStep.GEMINI_TRANSCRIBING)
+                transcript = await self._transcribe_audio_gemini(audio_path)
+            else:
+                self.update_progress(50, ExtractionStep.VIDEO_TRANSCRIBING)
+                transcript = await self._transcribe_audio_whisper(audio_path)
 
             self.update_progress(90, ExtractionStep.VIDEO_COMBINING)
 

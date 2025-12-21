@@ -1,0 +1,275 @@
+{
+  "timestamp": "2025-12-21T22:36:29.815237",
+  "total_urls": 1,
+  "benchmark_options": {
+    "skip_duplicates": true,
+    "legacy_only": false,
+    "new_only": true,
+    "simulate_client_download": true
+  },
+  "results": [
+    {
+      "url": "https://www.recipetineats.com/slow-cooker-beef-stroganoff/",
+      "speed_diff_seconds": 0,
+      "speed_diff_percent": 0,
+      "cost_diff_usd": 0,
+      "cost_diff_percent": 0,
+      "quality_comparison": {},
+      "new": {
+        "success": true,
+        "error": null,
+        "failure_stage": null,
+        "duration_seconds": 0.6490881443023682,
+        "detected_type": "url",
+        "content_type_detected": null,
+        "platform": null,
+        "total_cost_usd": 0,
+        "cost_breakdown": {},
+        "recipe_data": {
+          "title": "Slow Cooker Beef Stroganoff",
+          "description": "Recipe video above. The slow cooked version of Beef Stroganoff! Fall apart beef smothered in a creamy Stroganoff sauce with buttery garlic mushrooms, it's made with economical stewing beef yet tastes like a million dollars! 3 cook methods provided: stove, slow cooker or pressure cooker/instant pot* Recipe update: pursuant to some readers having difficulties with flour lumps, the steps have been updated to make it easier!",
+          "language": "en",
+          "ingredients": [
+            {
+              "name": "beef chuck or other stewing beef",
+              "quantity": 1.75,
+              "unit": "kg",
+              "notes": "cut in 4cm / 1.5\u201d cube",
+              "group": null
+            },
+            {
+              "name": "salt and pepper",
+              "quantity": 1.5,
+              "unit": "tsp",
+              "notes": "each",
+              "group": null
+            },
+            {
+              "name": "oil",
+              "quantity": 2,
+              "unit": "tbsp",
+              "notes": null,
+              "group": null
+            },
+            {
+              "name": "butter, unsalted",
+              "quantity": 1,
+              "unit": "tbsp",
+              "notes": null,
+              "group": null
+            },
+            {
+              "name": "large onion",
+              "quantity": 1,
+              "unit": null,
+              "notes": "halved then sliced into 1 cm / 2/5\" slices",
+              "group": null
+            },
+            {
+              "name": "garlic cloves",
+              "quantity": 4,
+              "unit": null,
+              "notes": "minced",
+              "group": null
+            },
+            {
+              "name": "flour, plain / all purpose",
+              "quantity": 7,
+              "unit": "tbsp",
+              "notes": null,
+              "group": null
+            },
+            {
+              "name": "Dijon Mustard",
+              "quantity": 4,
+              "unit": "tbsp",
+              "notes": null,
+              "group": null
+            },
+            {
+              "name": "beef stock/broth, reduced salt",
+              "quantity": 1,
+              "unit": "litre",
+              "notes": null,
+              "group": null
+            },
+            {
+              "name": "sour cream, full fat best",
+              "quantity": 1.5,
+              "unit": "cups",
+              "notes": null,
+              "group": null
+            },
+            {
+              "name": "butter, unsalted",
+              "quantity": 3,
+              "unit": "tbsp",
+              "notes": null,
+              "group": "Garlic Butter Mushrooms"
+            },
+            {
+              "name": "mushrooms, sliced into 0.5cm thick slices",
+              "quantity": 700,
+              "unit": "g",
+              "notes": null,
+              "group": "Garlic Butter Mushrooms"
+            },
+            {
+              "name": "garlic cloves, finely minced",
+              "quantity": 3,
+              "unit": null,
+              "notes": null,
+              "group": "Garlic Butter Mushrooms"
+            },
+            {
+              "name": "salt and pepper",
+              "quantity": 0.5,
+              "unit": "tsp",
+              "notes": null,
+              "group": "Garlic Butter Mushrooms"
+            },
+            {
+              "name": "Pasta, wide egg noodles, mashed potato",
+              "quantity": 1,
+              "unit": null,
+              "notes": null,
+              "group": "Serving"
+            },
+            {
+              "name": "Chives for garnish",
+              "quantity": 1,
+              "unit": null,
+              "notes": null,
+              "group": "Serving"
+            }
+          ],
+          "instructions": [
+            {
+              "step_number": 1,
+              "title": "Season beef",
+              "description": "Pat beef dry then sprinkle with all the salt and pepper.",
+              "timer_minutes": null,
+              "group": null
+            },
+            {
+              "step_number": 2,
+              "title": "Brown beef",
+              "description": "Heat 1 tbsp oil in a large heavy based pot or skillet* over high heat. Add beef in a single layer (not squished) and brown aggressively all over - 4 minutes or so. Remove and repeat with rest of beef, adding more oil as needed.",
+              "timer_minutes": null,
+              "group": null
+            },
+            {
+              "step_number": 3,
+              "title": "Saut\u00e9 aromatics",
+              "description": "Let the pot cool down a bit then return to stove. Melt half the butter, then cook garlic and onion for 3 minutes until softened.",
+              "timer_minutes": null,
+              "group": null
+            },
+            {
+              "step_number": 4,
+              "title": "Add flour",
+              "description": "Sprinkle the flour across the surface, then stir. Add the mustard, and stir - it will look gluey, that's ok, it will dissolve.",
+              "timer_minutes": null,
+              "group": null
+            },
+            {
+              "step_number": 5,
+              "title": "Add stock",
+              "description": "While stirring, pour in about half the beef stock then mix so the flour mixture dissolves into the liquid. It will thicken quite quickly into a gravy-like consistency .Switch to a whisk if needed, to make it lump free. Then add remaining stock, stir well, scraping the bottom of the pot, and bring to simmer. Cook using chosen method below.",
+              "timer_minutes": null,
+              "group": null
+            },
+            {
+              "step_number": 6,
+              "title": "Slow cooker",
+              "description": "Transfer all liquid into slow cooker. Add beef, then slow cook 8 hours on LOW or 5 hours on HIGH.",
+              "timer_minutes": 480,
+              "group": "Slow Cooking"
+            },
+            {
+              "step_number": 7,
+              "title": "Stove",
+              "description": "Add beef into pot. Cover with lid and adjust heat to low/medium low so the it's simmering gently. Simmer 2 hrs (check at 1.5 hrs) until beef beef falls apart easily.",
+              "timer_minutes": 120,
+              "group": "Slow Cooking"
+            },
+            {
+              "step_number": 8,
+              "title": "Instant pot",
+              "description": "SKIP FLOUR, follow Note 5 Gluten Free option. 40 minutes on high, same method as slow cooker.",
+              "timer_minutes": 40,
+              "group": "Slow Cooking"
+            },
+            {
+              "step_number": 9,
+              "title": "Other pressure cookers",
+              "description": "40 minutes on high, same method as slow cooker.",
+              "timer_minutes": 40,
+              "group": "Slow Cooking"
+            },
+            {
+              "step_number": 10,
+              "title": "Garlic Butter Mushrooms",
+              "description": "Melt half the butter in a large skillet over high heat. Add half the mushrooms and cook until almost golden (~3 minutes). Add half the garlic, salt and pepper, cook until golden. Remove, repeat with remaining butter, mushrooms and garlic.",
+              "timer_minutes": null,
+              "group": "Garlic Butter Mushrooms"
+            },
+            {
+              "step_number": 11,
+              "title": "Mix sour cream",
+              "description": "Mix sour cream with 1.5 cups of liquid from slow cooker (Note 2), then gently stir into stew - careful, the beef is delicate!",
+              "timer_minutes": null,
+              "group": "Finishing Stew"
+            },
+            {
+              "step_number": 12,
+              "title": "Stir in mushrooms",
+              "description": "Gently stir in mushrooms.",
+              "timer_minutes": null,
+              "group": "Finishing Stew"
+            },
+            {
+              "step_number": 13,
+              "title": "Serve",
+              "description": "Serve over noodles, pasta or mashed potato, sprinkled with chives!",
+              "timer_minutes": null,
+              "group": "Assembly"
+            }
+          ],
+          "servings": 8,
+          "difficulty": "medium",
+          "tags": [
+            "beef stew",
+            "slow cooked beef",
+            "slow cooker beef stroganoff",
+            "stroganoff stew"
+          ],
+          "categories": [
+            "Mains"
+          ],
+          "prep_time_minutes": 15,
+          "cook_time_minutes": 510,
+          "resting_time_minutes": 0,
+          "total_time_minutes": 525,
+          "_extraction_stats": {
+            "model": "gemini-2.5-flash-lite",
+            "provider": "gemini",
+            "method": "normalize",
+            "source_type": "url",
+            "input_tokens": 12013,
+            "output_tokens": 1716,
+            "total_tokens": 13729,
+            "estimated_cost_usd": 0.001415775
+          }
+        },
+        "thumbnail_url": "https://www.recipetineats.com/tachyon/2020/02/Slow-Cooked-Beef-Stroganoff-Stew_5-SQ.jpg",
+        "generated_image_url": null,
+        "job_id": "f47a1be1-b524-4aee-a115-bbd6074b674e",
+        "client_download_simulated": false,
+        "raw_text_preview": "Structured Recipe Data:\n{\n  \"@type\": \"Recipe\",\n  \"name\": \"Slow Cooker Beef Stroganoff\",\n  \"author\": {\n    \"@id\": \"https://www.recipetineats.com/#/schema/person/1684e6a75e9f91ae2e33ca2de95b47e2\"\n  },\n  \"description\": \"Recipe video above. The slow cooked version of  Beef Stroganoff! Fall apart beef smothered in a creamy Stroganoff sauce with buttery garlic mushrooms,\\u00a0it&#39;s made with economical stewing beef yet tastes like a million dollars! 3 cook methods provided: stove, slow cooker or pr",
+        "transcript_preview": null,
+        "description": null
+      }
+    }
+  ]
+}

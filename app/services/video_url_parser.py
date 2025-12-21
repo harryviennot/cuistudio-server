@@ -1,7 +1,10 @@
 """
 Video URL Parser
-Parses video URLs from TikTok, YouTube Shorts, Instagram Reels, and Facebook
+Parses video URLs from TikTok, YouTube Shorts, Instagram Reels, Facebook, and X/Twitter
 to extract platform and video ID for duplicate detection.
+
+Note: X/Twitter support is included but yt-dlp handles it dynamically.
+For new platforms, the ContentTypeDetector with yt-dlp probing is preferred.
 """
 
 import re
@@ -17,6 +20,7 @@ class VideoPlatform(str, Enum):
     YOUTUBE = "youtube"
     INSTAGRAM = "instagram"
     FACEBOOK = "facebook"
+    TWITTER = "twitter"  # Also handles x.com
 
 
 @dataclass
@@ -112,6 +116,12 @@ class VideoURLParser:
             r'facebook\.com/watch/?\?v=(\d+)',
             # Facebook video in user profile: facebook.com/user/videos/CODE
             r'facebook\.com/[^/]+/videos/(\d+)',
+        ],
+        VideoPlatform.TWITTER: [
+            # X.com (Twitter) status URL: x.com/user/status/1234567890
+            r'x\.com/[^/]+/status/(\d+)',
+            # Twitter.com status URL: twitter.com/user/status/1234567890
+            r'twitter\.com/[^/]+/status/(\d+)',
         ],
     }
 
@@ -241,10 +251,29 @@ class VideoURLParser:
             return VideoPlatform.YOUTUBE
         elif 'instagram.com' in url_lower:
             return VideoPlatform.INSTAGRAM
-        elif 'facebook.com' in url_lower:
+        elif 'facebook.com' in url_lower or 'fb.watch' in url_lower:
             return VideoPlatform.FACEBOOK
+        elif 'twitter.com' in url_lower or 'x.com' in url_lower:
+            return VideoPlatform.TWITTER
 
         return None
+
+    @classmethod
+    def extract_platform_from_url(cls, url: str) -> Optional[str]:
+        """
+        Extract platform name from URL as a string.
+
+        This is a generic version that returns the platform name string
+        instead of the enum, useful for dynamic platform detection.
+
+        Args:
+            url: The URL to check
+
+        Returns:
+            Platform name string if recognized, None otherwise
+        """
+        platform = cls.get_platform(url)
+        return platform.value if platform else None
 
     @classmethod
     def normalize_platform_name(cls, platform: str) -> Optional[VideoPlatform]:

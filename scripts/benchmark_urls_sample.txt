@@ -1,0 +1,53 @@
+# Sample URLs for extraction benchmarking
+# Add your own URLs below - one per line
+# Lines starting with # are comments
+
+# ============================================
+# VIDEO CONTENT (Standard video with audio)
+# ============================================
+# TikTok recipe video
+# https://www.tiktok.com/@example/video/1234567890
+
+# YouTube Shorts
+# https://youtube.com/shorts/ABC123
+
+# Instagram Reel
+# https://www.instagram.com/reel/ABC123/
+
+# ============================================
+# SLIDESHOW CONTENT (Image carousels)
+# ============================================
+# TikTok photo mode (slideshow)
+# https://www.tiktok.com/@example/photo/1234567890
+
+# Instagram carousel
+# https://www.instagram.com/p/ABC123/
+
+# ============================================
+# IMAGE POST (Single image with description)
+# ============================================
+# Facebook post with recipe image
+# https://www.facebook.com/share/ABC123/
+
+# X/Twitter post with recipe
+# https://x.com/user/status/1234567890
+
+# ============================================
+# WEBPAGE (Traditional recipe sites)
+# ============================================
+# Recipe blog
+# https://example.com/recipe/chocolate-cake
+
+# ============================================
+# YOUR URLS BELOW
+# ============================================
+
+
+https://vm.tiktok.com/ZNR2mYuLT/
+https://vm.tiktok.com/ZNR2mkPQh/
+https://www.instagram.com/reel/DMu0LGBCylR/?utm_source=ig_web_copy_link
+https://www.recipetineats.com/slow-cooker-beef-stroganoff/
+https://www.facebook.com/share/r/1EFbvd4nuo/?mibextid=wwXIfr
+https://www.instagram.com/reel/DSacNtNCKXL/?utm_source=ig_web_copy_link&igsh=NTc4MTIwNjQ2YQ==
+https://www.instagram.com/p/CzQvO_0hc-S/?utm_source=ig_web_copy_link&igsh=MzRlODBiNWFlZA==
+https://www.instagram.com/p/DLknlklNyQY/?utm_source=ig_web_copy_link&igsh=MzRlODBiNWFlZA==

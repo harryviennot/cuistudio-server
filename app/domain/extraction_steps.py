@@ -22,6 +22,15 @@ class ExtractionStep(str, Enum):
     VIDEO_EXTRACTING_AUDIO = "video_extracting_audio"
     VIDEO_TRANSCRIBING = "video_transcribing"
     VIDEO_COMBINING = "video_combining"
+    GEMINI_TRANSCRIBING = "gemini_transcribing"  # Gemini audio transcription (alternative to Whisper)
+
+    # Slideshow extraction (for TikTok photo mode, Instagram carousels)
+    SLIDESHOW_DOWNLOADING = "slideshow_downloading"
+    SLIDESHOW_ANALYZING = "slideshow_analyzing"
+
+    # Social post extraction (image posts with descriptions)
+    SOCIAL_EXTRACTING = "social_extracting"
+    VISION_ANALYZING = "vision_analyzing"
 
     # Photo extraction
     PHOTO_OCR_SINGLE = "photo_ocr_single"
