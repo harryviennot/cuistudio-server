@@ -17,7 +17,10 @@ services:
       - cuistudio-network
 
   cuistudio-server:
-    image: ghcr.io/harryviennot/cuistudio-server:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
     container_name: cuistudio-server
     depends_on:
       redis:
