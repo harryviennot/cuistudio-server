@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     # Sentry
     SENTRY_DSN: Optional[str] = None
 
+    # RevenueCat
+    REVENUECAT_WEBHOOK_SECRET: Optional[str] = None
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

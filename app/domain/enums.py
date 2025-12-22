@@ -60,3 +60,34 @@ class RecipeMode(str, Enum):
     EDIT = "edit"
     FORK = "fork"
     COOK = "cook"
+
+
+class SubscriptionStatus(str, Enum):
+    """User subscription status"""
+    NONE = "none"
+    ACTIVE = "active"
+    TRIALING = "trialing"
+    EXPIRED = "expired"
+    CANCELLED = "cancelled"
+    BILLING_ISSUE = "billing_issue"
+
+
+class CreditType(str, Enum):
+    """Types of credits"""
+    STANDARD = "standard"
+    REFERRAL = "referral"
+
+
+class CreditTransactionReason(str, Enum):
+    """Reasons for credit changes"""
+    EXTRACTION = "extraction"
+    WEEKLY_RESET = "weekly_reset"
+    REFERRAL_BONUS = "referral_bonus"
+    EXPIRED = "expired"
+    ADMIN_ADJUSTMENT = "admin_adjustment"
+
+
+class ReferralSource(str, Enum):
+    """Source of referral credits"""
+    REFERRER = "referrer"
+    REFEREE = "referee"
