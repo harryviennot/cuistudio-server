@@ -65,6 +65,7 @@ class Settings(BaseSettings):
 
     # RevenueCat
     REVENUECAT_WEBHOOK_SECRET: Optional[str] = None
+    REVENUECAT_API_KEY: Optional[str] = None  # Secret API key for fetching customer info
 
     model_config = SettingsConfigDict(
         env_file=".env",

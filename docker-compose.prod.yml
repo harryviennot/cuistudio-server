@@ -42,6 +42,7 @@ services:
       - SITE_URL=${SITE_URL}
       - SENTRY_DSN=${SENTRY_DSN}
       - UVICORN_WORKERS=2
+      - REVENUECAT_API_KEY=${REVENUECAT_API_KEY}
     deploy:
       resources:
         limits:

@@ -43,6 +43,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - SITE_URL=${SITE_URL}
       - SENTRY_DSN=${SENTRY_DSN}
+      - REVENUECAT_API_KEY=${REVENUECAT_API_KEY}
     env_file:
       - .env
     volumes:
