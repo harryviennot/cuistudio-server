@@ -950,10 +950,15 @@ async def submit_onboarding(
             )
 
         # Mark onboarding as completed in users table
+        # Also update the user's name if display_name was provided
         user_update = {
             "onboarding_completed": True,
             "updated_at": "now()"
         }
+
+        # Update name if display_name was provided during onboarding
+        if request.display_name:
+            user_update["name"] = request.display_name
 
         user_result = admin_client.from_("users").update(user_update).eq("id", user_id).execute()
 
