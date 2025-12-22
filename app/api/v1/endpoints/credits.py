@@ -147,18 +147,19 @@ async def sync_subscription(
     user_id = current_user["id"]
     settings = get_settings()
 
-    if not settings.REVENUECAT_API_KEY:
-        logger.error("REVENUECAT_API_KEY not configured")
+    if not settings.REVENUECAT_API_KEY or not settings.REVENUECAT_PROJECT_ID:
+        logger.error("RevenueCat not configured (missing API_KEY or PROJECT_ID)")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="RevenueCat not configured"
         )
 
     try:
-        # Fetch customer info from RevenueCat API
+        # Fetch customer info from RevenueCat API v2
+        # https://www.revenuecat.com/docs/api-v2
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"https://api.revenuecat.com/v1/subscribers/{user_id}",
+                f"https://api.revenuecat.com/v2/projects/{settings.REVENUECAT_PROJECT_ID}/customers/{user_id}",
                 headers={
                     "Authorization": f"Bearer {settings.REVENUECAT_API_KEY}",
                     "Content-Type": "application/json"
@@ -185,6 +186,7 @@ async def sync_subscription(
                 )
 
             customer_data = response.json()
+            logger.info(f"RevenueCat API response for user {user_id}: {customer_data}")
 
         # Sync the subscription data to our database
         subscription_service = SubscriptionService(supabase)

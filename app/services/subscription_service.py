@@ -14,7 +14,8 @@ from app.domain.enums import SubscriptionStatus
 logger = logging.getLogger(__name__)
 
 # RevenueCat entitlement identifier for premium access
-PRO_ENTITLEMENT_ID = "pro"
+# This must match the entitlement ID configured in RevenueCat dashboard
+PRO_ENTITLEMENT_ID = "Cuisto Pro"
 
 
 class SubscriptionService:
@@ -114,33 +115,84 @@ class SubscriptionService:
     ) -> None:
         """
         Sync subscription data from RevenueCat customer info.
-        Called from webhook handler.
+        Handles both v1 (webhooks) and v2 (API) response formats.
         """
         try:
-            revenuecat_customer_id = customer_info.get("id", "")
-            entitlements = customer_info.get("subscriber", {}).get("entitlements", {})
+            logger.info(f"Syncing RevenueCat data for user {user_id}")
+            logger.debug(f"Customer info: {customer_info}")
 
-            # Check for pro entitlement
-            pro_entitlement = entitlements.get(PRO_ENTITLEMENT_ID, {})
+            # Detect response format and extract entitlements
+            # v2 API format: { "active_entitlements": { "items": [...] }, "id": "..." }
+            # v1 webhook format: { "id": "...", "subscriber": { "entitlements": {...} } }
+
+            pro_entitlement = None
+            revenuecat_customer_id = ""
+
+            if "active_entitlements" in customer_info:
+                # v2 API format
+                revenuecat_customer_id = customer_info.get("id", "")
+                entitlements_items = customer_info.get("active_entitlements", {}).get("items", [])
+
+                # In v2 API, if there are any active entitlements, the user has premium
+                # (We only have one entitlement "Cuisto Pro")
+                if entitlements_items:
+                    # Get the first active entitlement
+                    ent = entitlements_items[0]
+                    pro_entitlement = {
+                        "entitlement_id": ent.get("entitlement_id"),
+                        # expires_at in v2 is a Unix timestamp in milliseconds
+                        "expires_at": ent.get("expires_at"),
+                    }
+                    logger.info(f"Found active entitlement for user {user_id}: {pro_entitlement}")
+
+            elif "subscriber" in customer_info:
+                # v1 webhook format
+                revenuecat_customer_id = customer_info.get("id", "")
+                entitlements = customer_info.get("subscriber", {}).get("entitlements", {})
+                pro_entitlement = entitlements.get(PRO_ENTITLEMENT_ID, {})
+                # Convert empty dict to None
+                if not pro_entitlement:
+                    pro_entitlement = None
+            else:
+                # Unknown format
+                revenuecat_customer_id = customer_info.get("id", "")
+                logger.warning(f"Unknown RevenueCat response format for user {user_id}")
 
             if pro_entitlement:
-                is_active = pro_entitlement.get("expires_date") is None or (
-                    datetime.fromisoformat(
-                        pro_entitlement["expires_date"].replace("Z", "+00:00")
-                    ) > datetime.now(timezone.utc)
-                )
+                # Handle both v1 and v2 field names
+                # v1 uses ISO date strings, v2 uses Unix timestamps in ms
+                expires_raw = pro_entitlement.get("expires_date") or pro_entitlement.get("expires_at")
+
+                # Convert expires to ISO string if it's a Unix timestamp
+                if isinstance(expires_raw, int):
+                    # Unix timestamp in milliseconds
+                    expires_date = datetime.fromtimestamp(expires_raw / 1000, tz=timezone.utc).isoformat()
+                else:
+                    expires_date = expires_raw
+
+                product_id = pro_entitlement.get("product_identifier") or pro_entitlement.get("product_id")
+                original_purchase = pro_entitlement.get("original_purchase_date") or pro_entitlement.get("original_purchase_at")
+                period_type = pro_entitlement.get("period_type", "").lower()
+
+                # Check if still active
+                if expires_date:
+                    expires_dt = datetime.fromisoformat(expires_date.replace("Z", "+00:00"))
+                    is_active = expires_dt > datetime.now(timezone.utc)
+                else:
+                    is_active = True  # No expiry means lifetime access
 
                 subscription_data = {
                     "user_id": user_id,
                     "revenuecat_customer_id": revenuecat_customer_id,
-                    "product_id": pro_entitlement.get("product_identifier"),
+                    "product_id": product_id,
                     "entitlement_id": PRO_ENTITLEMENT_ID,
                     "is_active": is_active,
-                    "expires_at": pro_entitlement.get("expires_date"),
-                    "original_purchase_date": pro_entitlement.get("original_purchase_date"),
-                    "is_trial": pro_entitlement.get("period_type") == "trial",
+                    "expires_at": expires_date,
+                    "original_purchase_date": original_purchase,
+                    "is_trial": period_type == "trial",
                     "updated_at": datetime.now(timezone.utc).isoformat()
                 }
+                logger.info(f"User {user_id} subscription: active={is_active}, expires={expires_date}")
             else:
                 # No active entitlement
                 subscription_data = {
@@ -149,6 +201,7 @@ class SubscriptionService:
                     "is_active": False,
                     "updated_at": datetime.now(timezone.utc).isoformat()
                 }
+                logger.info(f"User {user_id} has no active entitlements")
 
             # Upsert subscription
             self.supabase.table("user_subscriptions").upsert(
