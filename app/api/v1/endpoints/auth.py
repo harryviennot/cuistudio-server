@@ -1621,8 +1621,10 @@ async def delete_account(
         return MessageResponse(message="Account deleted successfully.")
 
     except Exception as e:
+        import traceback
         logger.error(f"Account deletion error for user {current_user['id']}: {str(e)}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete account. Please contact support."
+            detail=f"Database error deleting user"
         )
