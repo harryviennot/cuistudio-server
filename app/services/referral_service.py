@@ -8,7 +8,6 @@ Business Rules:
 - Maximum 50 referral credits per user
 - Users can only use one referral code (during onboarding)
 """
-from datetime import datetime, timezone
 from typing import Optional, Tuple, Dict, Any
 from supabase import Client
 import logging

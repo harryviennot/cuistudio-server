@@ -11,7 +11,7 @@ Business Rules:
 - Use standard credits first, then referral credits
 """
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Tuple, Dict, Any
 from supabase import Client
 import logging
 

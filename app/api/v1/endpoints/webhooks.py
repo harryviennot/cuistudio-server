@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
 from supabase import Client
 import logging
 import hmac
-import hashlib
 
 from app.core.database import get_supabase_admin_client
 from app.core.config import get_settings

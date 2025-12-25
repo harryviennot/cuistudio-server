@@ -1626,5 +1626,5 @@ async def delete_account(
         logger.error(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database error deleting user"
+            detail="Database error deleting user"
         )

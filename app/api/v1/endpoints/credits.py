@@ -16,7 +16,6 @@ from app.api.v1.schemas.credits import (
     CanExtractResponse,
     SubscriptionStatusResponse,
 )
-from app.api.v1.schemas.common import MessageResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/credits", tags=["Credits"])

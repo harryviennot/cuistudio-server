@@ -1,7 +1,7 @@
 """
 Referral endpoints
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from supabase import Client
 import logging
 
