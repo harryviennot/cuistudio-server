@@ -25,6 +25,8 @@ from app.services.thumbnail_cache_service import ThumbnailCacheService
 from app.repositories.recipe_repository import RecipeRepository
 from app.repositories.video_source_repository import VideoSourceRepository
 from app.core.events import get_event_broadcaster
+from app.services.credit_service import CreditService
+from app.services.subscription_service import SubscriptionService
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,8 @@ class ExtractionService:
         self.video_source_repo = VideoSourceRepository(supabase)
         self.recipe_save_service = RecipeSaveService(supabase)
         self.thumbnail_cache = ThumbnailCacheService(supabase)
+        self.credit_service = CreditService(supabase)
+        self.subscription_service = SubscriptionService(supabase)
 
     async def extract_and_create_recipe(
         self,
@@ -765,6 +769,17 @@ class ExtractionService:
             )
 
             recipe_id = result["recipe_id"]
+
+            # Deduct credit for successful extraction (free users only)
+            try:
+                is_premium = await self.subscription_service.is_premium(user_id)
+                if not is_premium:
+                    await self.credit_service.deduct_credit(user_id, job_id, is_premium)
+                    logger.info(f"Deducted 1 credit for user {user_id} (extraction job {job_id})")
+            except Exception as credit_error:
+                # Don't fail the extraction if credit deduction fails
+                # The extraction already succeeded, credit check was done upfront
+                logger.error(f"Failed to deduct credit for user {user_id}: {credit_error}")
 
             # Update job status to completed
             if job_id:
