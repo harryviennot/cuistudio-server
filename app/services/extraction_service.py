@@ -712,7 +712,8 @@ class ExtractionService:
                 "servings": normalized_data.get("servings"),
                 "difficulty": normalized_data.get("difficulty"),
                 "tags": normalized_data.get("tags", []),
-                "categories": normalized_data.get("categories", []),
+                "category_slug": normalized_data.get("category_slug"),  # New: single category
+                "categories": normalized_data.get("categories", []),  # Keep for backwards compat
                 "prep_time_minutes": normalized_data.get("prep_time_minutes"),
                 "cook_time_minutes": normalized_data.get("cook_time_minutes"),
                 "resting_time_minutes": normalized_data.get("resting_time_minutes"),
@@ -1188,7 +1189,8 @@ class ExtractionService:
                 "servings": normalized_data.get("servings"),
                 "difficulty": normalized_data.get("difficulty"),
                 "tags": normalized_data.get("tags", []),
-                "categories": normalized_data.get("categories", []),
+                "category_slug": normalized_data.get("category_slug"),  # New: single category
+                "categories": normalized_data.get("categories", []),  # Keep for backwards compat
                 "prep_time_minutes": normalized_data.get("prep_time_minutes"),
                 "cook_time_minutes": normalized_data.get("cook_time_minutes"),
                 "resting_time_minutes": normalized_data.get("resting_time_minutes"),

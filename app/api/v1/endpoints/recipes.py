@@ -24,10 +24,12 @@ from app.api.v1.schemas.recipe import (
     RecipeListItemResponse,
     UserRecipeDataResponse,
     RecipeContributorResponse,
+    RecipeCategoryResponse,
     MarkRecipeAseCookedRequest,
     UpdateCookingEventRequest,
     CookingEventResponse,
 )
+from app.repositories.category_repository import CategoryRepository
 from app.api.v1.schemas.collection import (
     SaveRecipeRequest,
     SaveRecipeResponse
@@ -48,6 +50,12 @@ async def create_recipe(
     """Create a new recipe manually"""
     try:
         repo = RecipeRepository(supabase)
+        cat_repo = CategoryRepository(supabase)
+
+        # Resolve category_slug to category_id if provided
+        category_id = None
+        if recipe_data.category_slug:
+            category_id = await cat_repo.get_id_by_slug(recipe_data.category_slug)
 
         # Prepare recipe data
         data = {
@@ -59,7 +67,8 @@ async def create_recipe(
             "servings": recipe_data.servings,
             "difficulty": recipe_data.difficulty.value if recipe_data.difficulty else None,
             "tags": recipe_data.tags,
-            "categories": recipe_data.categories,
+            "category_id": category_id,
+            "categories": recipe_data.categories,  # Keep for backwards compat
             "prep_time_minutes": recipe_data.timings.prep_time_minutes if recipe_data.timings else None,
             "cook_time_minutes": recipe_data.timings.cook_time_minutes if recipe_data.timings else None,
             "total_time_minutes": recipe_data.timings.total_time_minutes if recipe_data.timings else None,
@@ -421,6 +430,7 @@ async def update_recipe(
     """Update a recipe"""
     try:
         repo = RecipeRepository(supabase)
+        cat_repo = CategoryRepository(supabase)
 
         # Check ownership or collaboration permission
         recipe = await repo.get_by_id(recipe_id)
@@ -467,6 +477,10 @@ async def update_recipe(
             data["difficulty"] = update_data.difficulty.value
         if update_data.tags is not None:
             data["tags"] = update_data.tags
+        # Handle category_slug -> category_id
+        if update_data.category_slug is not None:
+            category_id = await cat_repo.get_id_by_slug(update_data.category_slug)
+            data["category_id"] = category_id
         if update_data.categories is not None:
             data["categories"] = update_data.categories
         if update_data.timings is not None:
@@ -891,6 +905,7 @@ async def search_recipes_ai(
 
 # Helper functions
 
+
 async def _format_recipe_response(
     recipe: dict,
     user_id: Optional[str],
@@ -935,6 +950,18 @@ async def _format_recipe_response(
         if video_source:
             video_platform = video_source.get("platform")
 
+    # Get category data if category_id is set
+    category = None
+    if recipe.get("category_id"):
+        repo = RecipeRepository(supabase)
+        enriched = await repo.enrich_with_category([recipe])
+        if enriched and enriched[0].get("category"):
+            cat = enriched[0]["category"]
+            category = RecipeCategoryResponse(
+                id=cat["id"],
+                slug=cat["slug"]
+            )
+
     return RecipeResponse(
         id=recipe["id"],
         title=recipe["title"],
@@ -945,6 +972,7 @@ async def _format_recipe_response(
         servings=recipe.get("servings"),
         difficulty=recipe.get("difficulty"),
         tags=recipe.get("tags", []),
+        category=category,
         categories=recipe.get("categories", []),
         timings=timings,
         source_type=recipe["source_type"],
@@ -1011,6 +1039,26 @@ async def _format_list_item_response(
         if video_source:
             video_platform = video_source.get("platform")
 
+    # Get category data if pre-enriched or category_id is set
+    category = None
+    if recipe.get("category"):
+        # Already enriched
+        cat = recipe["category"]
+        category = RecipeCategoryResponse(
+            id=cat["id"],
+            slug=cat["slug"]
+        )
+    elif recipe.get("category_id"):
+        # Need to fetch category
+        repo = RecipeRepository(supabase)
+        enriched = await repo.enrich_with_category([recipe])
+        if enriched and enriched[0].get("category"):
+            cat = enriched[0]["category"]
+            category = RecipeCategoryResponse(
+                id=cat["id"],
+                slug=cat["slug"]
+            )
+
     return RecipeListItemResponse(
         id=recipe["id"],
         title=recipe["title"],
@@ -1019,6 +1067,7 @@ async def _format_list_item_response(
         servings=recipe.get("servings"),
         difficulty=recipe.get("difficulty"),
         tags=recipe.get("tags", []),
+        category=category,
         categories=recipe.get("categories", []),
         timings=timings,
         created_by=recipe["created_by"],

@@ -17,6 +17,62 @@ class RecipeRepository(BaseRepository):
     def __init__(self, supabase: Client):
         super().__init__(supabase, "recipes")
 
+    async def enrich_with_category(
+        self,
+        recipes: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Enrich recipe(s) with category data (id and slug only).
+
+        Frontend handles translation via i18n files using the slug as the key.
+
+        Args:
+            recipes: List of recipe dicts with category_id field
+
+        Returns:
+            Recipes with 'category' object added (id, slug)
+        """
+        if not recipes:
+            return recipes
+
+        # Collect unique category IDs
+        category_ids = list(set(
+            r["category_id"] for r in recipes
+            if r.get("category_id")
+        ))
+
+        if not category_ids:
+            # No categories to fetch, return recipes as-is
+            for recipe in recipes:
+                recipe["category"] = None
+            return recipes
+
+        try:
+            # Fetch categories (no translations - frontend handles i18n)
+            response = self.supabase.table("categories")\
+                .select("id, slug")\
+                .in_("id", category_ids)\
+                .execute()
+
+            # Build category lookup
+            category_lookup = {
+                cat["id"]: {"id": cat["id"], "slug": cat["slug"]}
+                for cat in response.data or []
+            }
+
+            # Enrich recipes
+            for recipe in recipes:
+                cat_id = recipe.get("category_id")
+                recipe["category"] = category_lookup.get(cat_id) if cat_id else None
+
+            return recipes
+        except Exception as e:
+            logger.warning(f"Failed to enrich recipes with category: {e}")
+            # Return recipes without category enrichment
+            for recipe in recipes:
+                recipe["category"] = None
+            return recipes
+
     @staticmethod
     def normalize_url(url: str) -> str:
         """
@@ -157,6 +213,7 @@ class RecipeRepository(BaseRepository):
             query = self.supabase.table(self.table_name)\
                 .select("*")\
                 .eq("is_public", True)\
+                .eq("is_draft", False)\
                 .order("created_at", desc=True)
 
             # Apply additional filters
@@ -165,6 +222,10 @@ class RecipeRepository(BaseRepository):
                     query = query.eq("difficulty", filters["difficulty"])
                 if "tags" in filters and filters["tags"]:
                     query = query.contains("tags", filters["tags"])
+                # New: filter by category_id (UUID)
+                if "category_id" in filters and filters["category_id"]:
+                    query = query.eq("category_id", filters["category_id"])
+                # Legacy: filter by categories array (deprecated)
                 if "categories" in filters and filters["categories"]:
                     query = query.contains("categories", filters["categories"])
 

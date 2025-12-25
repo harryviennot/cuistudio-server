@@ -14,6 +14,7 @@ from app.api.v1.endpoints import (
     credits,
     referrals,
     webhooks,
+    categories,
 )
 
 api_router = APIRouter()
@@ -29,3 +30,4 @@ api_router.include_router(discovery.router)
 api_router.include_router(credits.router)
 api_router.include_router(referrals.router)
 api_router.include_router(webhooks.router)
+api_router.include_router(categories.router)

@@ -12,6 +12,7 @@ from app.repositories.recipe_repository import RecipeRepository
 from app.repositories.user_recipe_repository import UserRecipeRepository
 from app.repositories.video_source_repository import VideoSourceRepository
 from app.repositories.video_creator_repository import VideoCreatorRepository
+from app.repositories.category_repository import CategoryRepository
 from app.services.video_url_parser import VideoURLParser
 from app.services.thumbnail_cache_service import ThumbnailCacheService
 
@@ -34,6 +35,7 @@ class RecipeSaveService:
         self.user_recipe_repo = UserRecipeRepository(supabase)
         self.video_source_repo = VideoSourceRepository(supabase)
         self.video_creator_repo = VideoCreatorRepository(supabase)
+        self.category_repo = CategoryRepository(supabase)
         self.thumbnail_cache = ThumbnailCacheService(supabase)
 
     async def publish_draft_recipe(
@@ -182,6 +184,12 @@ class RecipeSaveService:
                 # Video URLs (either VIDEO or LINK type with video) should be cleaned
                 clean_source_url = VideoURLParser.clean_url(source_url)
 
+            # Resolve category_slug to category_id if provided
+            category_id = None
+            category_slug = extracted_data.get("category_slug")
+            if category_slug:
+                category_id = await self.category_repo.get_id_by_slug(category_slug)
+
             # Prepare recipe data - as DRAFT
             recipe_data = {
                 "title": extracted_data["title"],
@@ -191,7 +199,8 @@ class RecipeSaveService:
                 "servings": extracted_data.get("servings"),
                 "difficulty": extracted_data.get("difficulty"),
                 "tags": extracted_data.get("tags", []),
-                "categories": extracted_data.get("categories", []),
+                "category_id": category_id,
+                "categories": extracted_data.get("categories", []),  # Keep for backwards compat
                 "prep_time_minutes": extracted_data.get("prep_time_minutes"),
                 "cook_time_minutes": extracted_data.get("cook_time_minutes"),
                 "resting_time_minutes": extracted_data.get("resting_time_minutes"),

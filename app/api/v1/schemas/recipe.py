@@ -9,6 +9,18 @@ from app.domain.models import Ingredient, Instruction, RecipeTimings
 from app.domain.enums import SourceType, DifficultyLevel
 
 
+# ============= Embedded Category Schema =============
+
+class RecipeCategoryResponse(BaseModel):
+    """
+    Category info embedded in recipe responses.
+
+    Frontend handles translation via i18n files using the slug as the key.
+    """
+    id: str
+    slug: str
+
+
 # ============= Request Schemas =============
 
 class RecipeCreateRequest(BaseModel):
@@ -23,7 +35,8 @@ class RecipeCreateRequest(BaseModel):
     servings: Optional[int] = Field(None, ge=1)
     difficulty: Optional[DifficultyLevel] = None
     tags: List[str] = Field(default_factory=list)
-    categories: List[str] = Field(default_factory=list)
+    category_slug: Optional[str] = None  # New: single category slug
+    categories: List[str] = Field(default_factory=list)  # Deprecated: kept for backwards compat
 
     timings: Optional[RecipeTimings] = None
 
@@ -45,7 +58,8 @@ class RecipeUpdateRequest(BaseModel):
     servings: Optional[int] = Field(None, ge=1)
     difficulty: Optional[DifficultyLevel] = None
     tags: Optional[List[str]] = None
-    categories: Optional[List[str]] = None
+    category_slug: Optional[str] = None  # New: single category slug
+    categories: Optional[List[str]] = None  # Deprecated: kept for backwards compat
 
     timings: Optional[RecipeTimings] = None
 
@@ -111,7 +125,8 @@ class RecipeResponse(BaseModel):
     servings: Optional[int] = None
     difficulty: Optional[DifficultyLevel] = None
     tags: List[str]
-    categories: List[str]
+    category: Optional[RecipeCategoryResponse] = None  # New: single category object
+    categories: List[str]  # Deprecated: kept for backwards compat
 
     timings: Optional[RecipeTimings] = None
 
@@ -167,7 +182,8 @@ class RecipeListItemResponse(BaseModel):
     servings: Optional[int] = None
     difficulty: Optional[DifficultyLevel] = None
     tags: List[str]
-    categories: List[str]
+    category: Optional[RecipeCategoryResponse] = None  # New: single category object
+    categories: List[str]  # Deprecated: kept for backwards compat
 
     timings: Optional[RecipeTimings] = None
 
