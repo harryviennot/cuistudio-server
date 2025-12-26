@@ -414,7 +414,7 @@ STEP 2 - IF RECIPE, EXTRACT DATA:
    - Use null if no timer is needed for that step
 7. Assign appropriate difficulty level (easy, medium, hard)
 {category_prompt}
-9. Add relevant tags (cuisine, diet, characteristics like "quick", "vegetarian", "comfort-food")
+9. Add relevant tags (cuisine, diet, characteristics like "quick", "vegetarian", "comfort-food"). Maximum 10 tags - if more are relevant, pick the most important ones
 10. If servings are not specified, make a reasonable estimate
 11. If prep/cook times are not mentioned, estimate based on the recipe complexity
 12. DETECT the primary language of the recipe (en, fr, es, de, it, etc.)
@@ -583,7 +583,7 @@ EXTRACTION RULES:
    - Use null if no timer is needed for that step
 7. If servings not visible, estimate based on ingredient quantities
 {category_prompt}
-9. Add relevant tags (cuisine, diet, characteristics like "quick", "vegetarian", "comfort-food")
+9. Add relevant tags (cuisine, diet, characteristics like "quick", "vegetarian", "comfort-food"). Maximum 10 tags - if more are relevant, pick the most important ones
 10. Return ONLY valid JSON, no markdown formatting
 
 Response format:
