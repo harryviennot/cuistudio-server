@@ -51,11 +51,18 @@ def _transform_recipe_for_response(
         user_data: Optional user-specific data (is_favorite, rating, etc.)
     """
     # Build timings object from individual columns
+    # For discovery endpoints, use prep + cook time only (exclude resting time)
+    # This prevents long resting times (e.g., marinating, fermentation) from
+    # discouraging users on the home page where the time isn't explained
     if recipe.get("prep_time_minutes") or recipe.get("cook_time_minutes") or recipe.get("total_time_minutes"):
+        prep = recipe.get("prep_time_minutes") or 0
+        cook = recipe.get("cook_time_minutes") or 0
+        active_time = prep + cook if (prep or cook) else recipe.get("total_time_minutes")
+
         recipe["timings"] = RecipeTimings(
             prep_time_minutes=recipe.get("prep_time_minutes"),
             cook_time_minutes=recipe.get("cook_time_minutes"),
-            total_time_minutes=recipe.get("total_time_minutes")
+            total_time_minutes=active_time
         )
     else:
         recipe["timings"] = None
