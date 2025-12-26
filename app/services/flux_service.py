@@ -381,12 +381,12 @@ class FluxService:
                 image_data = response.content
                 logger.info(f"Downloaded image: {len(image_data)} bytes")
 
-            # Generate storage path
-            file_name = f"{recipe_id}-generated.jpg"
-            storage_path = f"{user_id}/{file_name}"
+            # Generate storage path (recipe-centric, not user-centric)
+            file_name = "generated.jpg"
+            storage_path = f"{recipe_id}/{file_name}"
 
             # Upload to Supabase Storage
-            STORAGE_BUCKET = "recipe-images"
+            STORAGE_BUCKET = "recipe-assets"
 
             self.supabase.storage.from_(STORAGE_BUCKET).upload(
                 path=storage_path,
