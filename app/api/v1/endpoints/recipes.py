@@ -945,7 +945,8 @@ async def _format_recipe_response(
     contributors = recipe.get("contributors", [])
     contributor_responses = [
         RecipeContributorResponse(
-            user_id=c["user_id"],
+            user_id=c.get("user_id"),
+            display_name=c.get("display_name"),
             contribution_type=c["contribution_type"],
             order=c["order"]
         )

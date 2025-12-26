@@ -120,8 +120,9 @@ class RecipeSearchRequest(BaseModel):
 
 class RecipeContributorResponse(BaseModel):
     """Recipe contributor info"""
-    user_id: str
+    user_id: Optional[str] = None
     user_email: Optional[str] = None
+    display_name: Optional[str] = None
     contribution_type: str
     order: int
 
