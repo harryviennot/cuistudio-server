@@ -15,12 +15,14 @@ import logging
 from app.core.database import get_supabase_admin_client
 from app.core.security import get_current_user
 from app.repositories.user_recipe_repository import UserRecipeRepository
+from app.repositories.recipe_repository import RecipeRepository
 from app.api.v1.schemas.collection import (
     CollectionResponse,
     CollectionWithRecipesResponse,
     CollectionRecipeResponse,
     CollectionCountsResponse,
 )
+from app.api.v1.schemas.recipe import RecipeCategoryResponse
 from app.domain.models import RecipeTimings
 
 logger = logging.getLogger(__name__)
@@ -132,11 +134,24 @@ async def get_collection_by_slug(
                 current_user["id"]
             )
 
+        # Extract recipes from records for category enrichment
+        recipes_to_enrich = [record.get("recipes", {}) for record in records if record.get("recipes")]
+
+        # Batch enrich categories (avoids N+1 queries)
+        recipe_repo = RecipeRepository(admin_supabase)
+        enriched_recipes = await recipe_repo.enrich_with_category(recipes_to_enrich)
+
+        # Create a map from recipe ID to enriched recipe for easy lookup
+        enriched_map = {r["id"]: r for r in enriched_recipes}
+
         # Transform records to response format
         recipe_responses = []
         for record in records:
             recipe = record.get("recipes", {})
             if recipe:
+                # Get enriched version with category
+                enriched = enriched_map.get(recipe["id"], recipe)
+
                 # Build timings if available
                 timings = None
                 if recipe.get("prep_time_minutes") or recipe.get("cook_time_minutes"):
@@ -144,6 +159,15 @@ async def get_collection_by_slug(
                         prep_time_minutes=recipe.get("prep_time_minutes"),
                         cook_time_minutes=recipe.get("cook_time_minutes"),
                         total_time_minutes=recipe.get("total_time_minutes")
+                    )
+
+                # Build category response if available
+                category = None
+                if enriched.get("category"):
+                    cat = enriched["category"]
+                    category = RecipeCategoryResponse(
+                        id=cat["id"],
+                        slug=cat["slug"]
                     )
 
                 recipe_responses.append(
@@ -155,6 +179,7 @@ async def get_collection_by_slug(
                         servings=recipe.get("servings"),
                         difficulty=recipe.get("difficulty"),
                         tags=recipe.get("tags", []),
+                        category=category,
                         source_type=recipe["source_type"],
                         is_public=recipe["is_public"],
                         added_at=record.get("created_at", recipe["created_at"]),

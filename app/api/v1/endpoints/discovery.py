@@ -22,6 +22,7 @@ from app.api.v1.schemas.recipe import (
     TrendingRecipeResponse,
     UserCookingHistoryItemResponse,
     UserRecipeDataResponse,
+    RecipeCategoryResponse,
 )
 from app.api.v1.schemas.discovery import (
     MostExtractedRecipeResponse,
@@ -80,6 +81,16 @@ def _transform_recipe_for_response(
     # Ensure contributors is a list (even if empty)
     if not recipe.get("contributors"):
         recipe["contributors"] = []
+
+    # Handle category data (enriched by enrich_with_category)
+    if recipe.get("category"):
+        cat = recipe["category"]
+        recipe["category"] = RecipeCategoryResponse(
+            id=cat["id"],
+            slug=cat["slug"]
+        )
+    else:
+        recipe["category"] = None
 
     # Attach user-specific data if available
     if user_data:
@@ -155,6 +166,9 @@ async def get_trending_recipes(
             limit=limit,
             offset=offset
         )
+
+        # Batch enrich categories (avoids N+1 queries)
+        trending_recipes = await repo.enrich_with_category(trending_recipes)
 
         # Batch fetch user data if authenticated
         user_id = current_user["id"] if current_user else None
@@ -270,6 +284,9 @@ async def get_most_extracted_recipes(
             offset=offset
         )
 
+        # Batch enrich categories (avoids N+1 queries)
+        extracted_recipes = await repo.enrich_with_category(extracted_recipes)
+
         # Batch fetch user data if authenticated
         user_id = current_user["id"] if current_user else None
         recipe_ids = [r["id"] for r in extracted_recipes]
@@ -314,6 +331,9 @@ async def get_highest_rated_recipes(
             offset=offset
         )
 
+        # Batch enrich categories (avoids N+1 queries)
+        rated_recipes = await repo.enrich_with_category(rated_recipes)
+
         # Batch fetch user data if authenticated
         user_id = current_user["id"] if current_user else None
         recipe_ids = [r["id"] for r in rated_recipes]
@@ -351,6 +371,9 @@ async def get_recent_recipes(
             limit=limit,
             offset=offset
         )
+
+        # Batch enrich categories (avoids N+1 queries)
+        recent_recipes = await repo.enrich_with_category(recent_recipes)
 
         # Batch fetch user data if authenticated
         user_id = current_user["id"] if current_user else None

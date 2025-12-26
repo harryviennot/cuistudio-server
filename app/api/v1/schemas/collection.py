@@ -10,6 +10,7 @@ from typing import List, Optional
 from datetime import datetime
 
 from app.domain.models import RecipeTimings
+from app.api.v1.schemas.recipe import RecipeCategoryResponse
 
 
 # ============= Request Schemas =============
@@ -63,6 +64,7 @@ class CollectionRecipeResponse(BaseModel):
     servings: Optional[int] = None
     difficulty: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
+    category: Optional[RecipeCategoryResponse] = None
     source_type: str
     is_public: bool
     added_at: datetime
