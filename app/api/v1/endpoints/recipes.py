@@ -433,10 +433,14 @@ async def update_recipe(
     recipe_id: str,
     update_data: RecipeUpdateRequest,
     current_user: dict = Depends(get_authenticated_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: Client = Depends(get_supabase_admin_client)
 ):
     """Update a recipe"""
     try:
+        # Log the incoming request data
+        logger.info(f"[UPDATE] Received update_data: {update_data.model_dump()}")
+        logger.info(f"[UPDATE] category_slug field value: {update_data.category_slug!r}")
+
         repo = RecipeRepository(supabase)
         cat_repo = CategoryRepository(supabase)
 
@@ -486,8 +490,10 @@ async def update_recipe(
         if update_data.tags is not None:
             data["tags"] = update_data.tags
         # Handle category_slug -> category_id
+        logger.info(f"[UPDATE] category_slug from request: {update_data.category_slug!r}")
         if update_data.category_slug is not None:
             category_id = await cat_repo.get_id_by_slug(update_data.category_slug)
+            logger.info(f"[UPDATE] Resolved category_id: {category_id}")
             data["category_id"] = category_id
         if update_data.timings is not None:
             data["prep_time_minutes"] = update_data.timings.prep_time_minutes
@@ -496,7 +502,18 @@ async def update_recipe(
         if update_data.is_public is not None:
             data["is_public"] = update_data.is_public
 
+        logger.info(f"[UPDATE] Final data dict being sent to update: {list(data.keys())}")
+        logger.info(f"[UPDATE] category_id in data: {'category_id' in data}, value: {data.get('category_id')}")
         updated_recipe = await repo.update(recipe_id, data)
+
+        # If update didn't return data, fetch the recipe again
+        if not updated_recipe:
+            updated_recipe = await repo.get_by_id(recipe_id)
+            if not updated_recipe:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to retrieve updated recipe"
+                )
 
         return await _format_recipe_response(updated_recipe, current_user["id"], supabase)
 

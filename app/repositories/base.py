@@ -37,7 +37,11 @@ class BaseRepository(Generic[T]):
     async def update(self, record_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Update a record by ID"""
         try:
+            logger.info(f"[BASE REPO] Updating {self.table_name} id={record_id} with data keys: {list(data.keys())}")
+            if "category_id" in data:
+                logger.info(f"[BASE REPO] category_id value being sent: {data['category_id']}")
             response = self.supabase.table(self.table_name).update(data).eq("id", record_id).execute()
+            logger.info(f"[BASE REPO] Update response data: {response.data}")
             return response.data[0] if response.data else None
         except Exception as e:
             logger.error(f"Error updating record in {self.table_name}: {str(e)}")
