@@ -200,7 +200,7 @@ class RecipeSaveService:
                 "difficulty": extracted_data.get("difficulty"),
                 "tags": extracted_data.get("tags", []),
                 "category_id": category_id,
-                "categories": extracted_data.get("categories", []),  # Keep for backwards compat
+                # Note: "categories" column was removed from DB - use category_id instead
                 "prep_time_minutes": extracted_data.get("prep_time_minutes"),
                 "cook_time_minutes": extracted_data.get("cook_time_minutes"),
                 "resting_time_minutes": extracted_data.get("resting_time_minutes"),

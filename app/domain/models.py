@@ -33,7 +33,7 @@ class Instruction(BaseModel):
     step_number: int
     title: str
     description: str
-    timer_minutes: Optional[int] = None  # If this step requires a timer
+    timer_minutes: Optional[float] = None  # If this step requires a timer (supports decimals like 0.5 for 30 seconds)
     group: Optional[str] = None  # e.g., "For the sauce", "Assembly"
 
 
