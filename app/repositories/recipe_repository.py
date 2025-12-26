@@ -185,11 +185,11 @@ class RecipeRepository(BaseRepository):
             query = self.supabase.table(self.table_name)\
                 .select("""
                     id, title, description, image_url,
-                    servings, difficulty, tags, categories,
+                    servings, difficulty, tags, category_id,
                     prep_time_minutes, cook_time_minutes, total_time_minutes,
                     created_by, is_public, fork_count,
                     average_rating, rating_count, total_times_cooked,
-                    created_at
+                    created_at, source_type
                 """)\
                 .eq("created_by", user_id)\
                 .order("created_at", desc=True)\
@@ -222,12 +222,9 @@ class RecipeRepository(BaseRepository):
                     query = query.eq("difficulty", filters["difficulty"])
                 if "tags" in filters and filters["tags"]:
                     query = query.contains("tags", filters["tags"])
-                # New: filter by category_id (UUID)
+                # Filter by category_id (UUID)
                 if "category_id" in filters and filters["category_id"]:
                     query = query.eq("category_id", filters["category_id"])
-                # Legacy: filter by categories array (deprecated)
-                if "categories" in filters and filters["categories"]:
-                    query = query.contains("categories", filters["categories"])
 
             response = query.limit(limit).offset(offset).execute()
             return response.data or []
@@ -282,11 +279,11 @@ class RecipeRepository(BaseRepository):
                 query = self.supabase.table(self.table_name)\
                     .select("""
                         id, title, description, image_url,
-                        servings, difficulty, tags, categories,
+                        servings, difficulty, tags, category_id,
                         prep_time_minutes, cook_time_minutes, total_time_minutes,
                         created_by, is_public, fork_count,
                         average_rating, rating_count, total_times_cooked,
-                        created_at
+                        created_at, source_type
                     """)\
                     .or_(f"title.ilike.%{search_query}%,description.ilike.%{search_query}%")
 

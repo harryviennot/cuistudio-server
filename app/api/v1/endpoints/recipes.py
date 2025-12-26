@@ -68,7 +68,6 @@ async def create_recipe(
             "difficulty": recipe_data.difficulty.value if recipe_data.difficulty else None,
             "tags": recipe_data.tags,
             "category_id": category_id,
-            "categories": recipe_data.categories,  # Keep for backwards compat
             "prep_time_minutes": recipe_data.timings.prep_time_minutes if recipe_data.timings else None,
             "cook_time_minutes": recipe_data.timings.cook_time_minutes if recipe_data.timings else None,
             "total_time_minutes": recipe_data.timings.total_time_minutes if recipe_data.timings else None,
@@ -275,6 +274,9 @@ async def search_recipes_full_text(
 
         recipes = await repo.search_recipes(user_id, q, limit, offset)
 
+        # Batch enrich categories (avoids N+1 queries)
+        recipes = await repo.enrich_with_category(recipes)
+
         # Batch fetch user data if authenticated
         user_data_map = {}
         if user_id and recipes:
@@ -356,7 +358,7 @@ async def list_recipes(
     offset: int = Query(0, ge=0),
     difficulty: Optional[str] = None,
     tags: Optional[str] = None,  # Comma-separated
-    categories: Optional[str] = None,  # Comma-separated
+    category_id: Optional[str] = None,  # Single category UUID
     current_user: Optional[dict] = Depends(get_current_user_optional),
     supabase: Client = Depends(get_supabase_client)
 ):
@@ -369,10 +371,13 @@ async def list_recipes(
             filters["difficulty"] = difficulty
         if tags:
             filters["tags"] = tags.split(",")
-        if categories:
-            filters["categories"] = categories.split(",")
+        if category_id:
+            filters["category_id"] = category_id
 
         recipes = await repo.get_public_recipes(limit, offset, filters)
+
+        # Batch enrich categories (avoids N+1 queries)
+        recipes = await repo.enrich_with_category(recipes)
 
         user_id = current_user["id"] if current_user else None
 
@@ -404,6 +409,9 @@ async def get_my_recipes(
     try:
         repo = RecipeRepository(supabase)
         recipes = await repo.get_user_recipes(current_user["id"], limit, offset)
+
+        # Batch enrich categories (avoids N+1 queries)
+        recipes = await repo.enrich_with_category(recipes)
 
         # Batch fetch user data for all recipes in one query (eliminates N+1 problem)
         user_repo = UserRecipeRepository(supabase)
@@ -481,8 +489,6 @@ async def update_recipe(
         if update_data.category_slug is not None:
             category_id = await cat_repo.get_id_by_slug(update_data.category_slug)
             data["category_id"] = category_id
-        if update_data.categories is not None:
-            data["categories"] = update_data.categories
         if update_data.timings is not None:
             data["prep_time_minutes"] = update_data.timings.prep_time_minutes
             data["cook_time_minutes"] = update_data.timings.cook_time_minutes
@@ -591,7 +597,7 @@ async def fork_recipe(
             "servings": original["servings"],
             "difficulty": original["difficulty"],
             "tags": original["tags"],
-            "categories": original["categories"],
+            "category_id": original.get("category_id"),
             "prep_time_minutes": original["prep_time_minutes"],
             "cook_time_minutes": original["cook_time_minutes"],
             "total_time_minutes": original["total_time_minutes"],
@@ -626,6 +632,9 @@ async def get_recipe_forks(
     try:
         repo = RecipeRepository(supabase)
         forks = await repo.get_recipe_forks(recipe_id)
+
+        # Batch enrich categories (avoids N+1 queries)
+        forks = await repo.enrich_with_category(forks)
 
         user_id = current_user["id"] if current_user else None
         return [await _format_list_item_response(f, user_id, supabase) for f in forks]
@@ -893,6 +902,9 @@ async def search_recipes_ai(
         # Sort by rank order
         ranked_recipes.sort(key=lambda r: ranked_ids.index(r["id"]))
 
+        # Batch enrich categories (avoids N+1 queries)
+        ranked_recipes = await repo.enrich_with_category(ranked_recipes)
+
         return [await _format_list_item_response(r, user_id, supabase) for r in ranked_recipes]
 
     except Exception as e:
@@ -973,7 +985,6 @@ async def _format_recipe_response(
         difficulty=recipe.get("difficulty"),
         tags=recipe.get("tags", []),
         category=category,
-        categories=recipe.get("categories", []),
         timings=timings,
         source_type=recipe["source_type"],
         source_url=recipe.get("source_url"),
@@ -1068,7 +1079,6 @@ async def _format_list_item_response(
         difficulty=recipe.get("difficulty"),
         tags=recipe.get("tags", []),
         category=category,
-        categories=recipe.get("categories", []),
         timings=timings,
         created_by=recipe["created_by"],
         is_public=recipe["is_public"],

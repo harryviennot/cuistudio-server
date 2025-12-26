@@ -35,8 +35,7 @@ class RecipeCreateRequest(BaseModel):
     servings: Optional[int] = Field(None, ge=1)
     difficulty: Optional[DifficultyLevel] = None
     tags: List[str] = Field(default_factory=list)
-    category_slug: Optional[str] = None  # New: single category slug
-    categories: List[str] = Field(default_factory=list)  # Deprecated: kept for backwards compat
+    category_slug: Optional[str] = None  # Single category slug
 
     timings: Optional[RecipeTimings] = None
 
@@ -58,8 +57,7 @@ class RecipeUpdateRequest(BaseModel):
     servings: Optional[int] = Field(None, ge=1)
     difficulty: Optional[DifficultyLevel] = None
     tags: Optional[List[str]] = None
-    category_slug: Optional[str] = None  # New: single category slug
-    categories: Optional[List[str]] = None  # Deprecated: kept for backwards compat
+    category_slug: Optional[str] = None  # Single category slug
 
     timings: Optional[RecipeTimings] = None
 
@@ -125,8 +123,7 @@ class RecipeResponse(BaseModel):
     servings: Optional[int] = None
     difficulty: Optional[DifficultyLevel] = None
     tags: List[str]
-    category: Optional[RecipeCategoryResponse] = None  # New: single category object
-    categories: List[str]  # Deprecated: kept for backwards compat
+    category: Optional[RecipeCategoryResponse] = None  # Single category object
 
     timings: Optional[RecipeTimings] = None
 
@@ -182,8 +179,7 @@ class RecipeListItemResponse(BaseModel):
     servings: Optional[int] = None
     difficulty: Optional[DifficultyLevel] = None
     tags: List[str]
-    category: Optional[RecipeCategoryResponse] = None  # New: single category object
-    categories: List[str]  # Deprecated: kept for backwards compat
+    category: Optional[RecipeCategoryResponse] = None  # Single category object
 
     timings: Optional[RecipeTimings] = None
 
