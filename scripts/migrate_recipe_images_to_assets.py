@@ -49,11 +49,15 @@ TARGET_BUCKET = "recipe-assets"
 def get_supabase_client() -> Client:
     """Create Supabase client from environment variables."""
     url = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
+    key = (
+        os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+        or os.environ.get("SUPABASE_SECRET_KEY")
+        or os.environ.get("SUPABASE_KEY")
+    )
 
     if not url or not key:
         raise ValueError(
-            "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variables. "
+            "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY/SUPABASE_SECRET_KEY environment variables. "
             "Please set them before running this script."
         )
 
