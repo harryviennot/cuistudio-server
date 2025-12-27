@@ -395,3 +395,50 @@ async def get_recent_recipes(
     except Exception as e:
         logger.error(f"Error fetching recent recipes: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to fetch recent recipes")
+
+
+@router.get("/popular", response_model=List[RecentRecipeResponse])
+async def get_popular_recipes(
+    request: Request,
+    category_id: Optional[str] = Query(None, description="Filter by category UUID"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+    supabase: Client = Depends(get_supabase_client)
+):
+    """
+    Get popular public recipes, optionally filtered by category.
+
+    Recipes are sorted by a popularity score that combines rating quality with engagement:
+    - popularity_score = (average_rating * rating_count) + total_times_cooked
+
+    This balances highly-rated recipes with frequently-cooked recipes.
+
+    Query parameters:
+    - category_id: Optional UUID to filter recipes by category
+    - limit: Maximum results per page (default: 20)
+    - offset: Pagination offset (default: 0)
+
+    If authenticated, also includes user-specific data (is_favorite, rating, etc.)
+    """
+    try:
+        repo = RecipeRepository(supabase)
+        popular_recipes = await repo.get_popular_recipes(
+            category_id=category_id,
+            limit=limit,
+            offset=offset
+        )
+
+        # Batch fetch user data if authenticated
+        user_id = current_user["id"] if current_user else None
+        recipe_ids = [r["id"] for r in popular_recipes]
+        user_data_map = await _get_user_data_map(user_id, recipe_ids, request)
+
+        # Transform each recipe to match the response schema
+        return [
+            _transform_recipe_for_response(recipe, user_data_map.get(recipe["id"]))
+            for recipe in popular_recipes
+        ]
+    except Exception as e:
+        logger.error(f"Error fetching popular recipes: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch popular recipes")

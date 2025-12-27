@@ -698,3 +698,43 @@ class RecipeRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Error fetching recent public recipes: {str(e)}")
             raise
+
+    async def get_popular_recipes(
+        self,
+        category_id: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        Get popular public recipes with optional category filter.
+
+        Popularity is calculated as: (average_rating * rating_count) + total_times_cooked
+        This balances rating quality with engagement metrics.
+
+        Args:
+            category_id: Optional UUID to filter by category
+            limit: Maximum number of recipes to return
+            offset: Number of results to skip for pagination
+
+        Returns:
+            List of recipes ordered by popularity score (highest first)
+        """
+        try:
+            response = self.supabase.rpc(
+                'get_popular_recipes',
+                {
+                    'category_id_param': category_id,
+                    'limit_param': limit,
+                    'offset_param': offset
+                }
+            ).execute()
+
+            recipes = response.data or []
+
+            # Enrich with category data
+            recipes = await self.enrich_with_category(recipes)
+
+            return recipes
+        except Exception as e:
+            logger.error(f"Error fetching popular recipes: {str(e)}")
+            raise
