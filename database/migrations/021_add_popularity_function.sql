@@ -1,12 +1,15 @@
 -- Migration: Add get_popular_recipes function for popularity-based sorting
 -- Description: Creates RPC function to get recipes sorted by popularity score
+-- Uses materialized view (popular_recipes_mv) for instant lookups
 -- Popularity score = (average_rating * rating_count) + total_times_cooked
+--
+-- IMPORTANT: Run migration 022 first to create the materialized view!
 
 -- Drop existing function if exists (to handle column changes)
 DROP FUNCTION IF EXISTS public.get_popular_recipes(UUID, INTEGER, INTEGER);
 
 -- Create the popularity function
--- Returns all recipe columns plus a calculated popularity_score
+-- Uses JOIN with materialized view for instant lookups (no on-the-fly calculation)
 CREATE OR REPLACE FUNCTION public.get_popular_recipes(
     category_id_param UUID DEFAULT NULL,
     limit_param INTEGER DEFAULT 20,
@@ -81,17 +84,15 @@ BEGIN
         r.is_draft,
         r.image_source,
         r.category_id,
-        -- Popularity score: rating quality + engagement
-        (COALESCE(r.average_rating, 0) * COALESCE(r.rating_count, 0)) +
-        COALESCE(r.total_times_cooked, 0) AS popularity_score
+        mv.popularity_score
     FROM public.recipes r
-    WHERE
-        r.is_public = TRUE
-        AND r.is_draft = FALSE
-        AND (category_id_param IS NULL OR r.category_id = category_id_param)
+    INNER JOIN public.popular_recipes_mv mv ON r.id = mv.id
+    WHERE (category_id_param IS NULL OR r.category_id = category_id_param)
     ORDER BY
-        popularity_score DESC,
-        r.created_at DESC
+        CASE
+            WHEN category_id_param IS NULL THEN mv.global_rank
+            ELSE mv.category_rank
+        END
     LIMIT limit_param
     OFFSET offset_param;
 END;
@@ -99,6 +100,7 @@ $$;
 
 -- Add comment for documentation
 COMMENT ON FUNCTION public.get_popular_recipes(UUID, INTEGER, INTEGER) IS
-'Returns public recipes sorted by popularity score.
+'Returns public recipes sorted by popularity score using cached materialized view.
 Popularity = (average_rating * rating_count) + total_times_cooked.
-Optionally filter by category_id. Results are paginated.';
+Optionally filter by category_id. Results are paginated.
+Cache is refreshed every 4 hours by APScheduler.';
