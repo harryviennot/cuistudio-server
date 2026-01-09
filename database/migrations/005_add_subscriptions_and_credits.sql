@@ -3,6 +3,35 @@
 -- This enables premium subscriptions and a credit-based extraction system for free users.
 
 -- ============================================================================
+-- AUTH STUB FOR CI/CD TESTING
+-- Creates auth schema and uid() function ONLY if they don't exist.
+-- Safe for production Supabase - does nothing if auth.uid() already exists.
+-- ============================================================================
+CREATE SCHEMA IF NOT EXISTS auth;
+
+DO $$
+BEGIN
+  -- Only create auth.uid() if it doesn't already exist
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+    JOIN pg_namespace n ON p.pronamespace = n.oid
+    WHERE n.nspname = 'auth' AND p.proname = 'uid'
+  ) THEN
+    CREATE FUNCTION auth.uid()
+    RETURNS uuid
+    LANGUAGE sql
+    STABLE
+    AS $func$
+      SELECT COALESCE(
+        nullif(current_setting('request.jwt.claim.sub', true), ''),
+        (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
+      )::uuid
+    $func$;
+  END IF;
+END
+$$;
+
+-- ============================================================================
 -- USER SUBSCRIPTIONS (synced from RevenueCat)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS public.user_subscriptions (
