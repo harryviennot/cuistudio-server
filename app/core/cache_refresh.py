@@ -39,7 +39,7 @@ async def refresh_popular_recipes_cache(supabase_url: str, supabase_key: str) ->
         supabase = create_client(supabase_url, supabase_key)
 
         # Call the refresh function
-        response = supabase.rpc('refresh_popular_recipes_cache').execute()
+        supabase.rpc('refresh_popular_recipes_cache').execute()
 
         stats["success"] = True
         logger.info("Successfully refreshed popular_recipes_mv materialized view")
