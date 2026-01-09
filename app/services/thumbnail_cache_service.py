@@ -14,7 +14,7 @@ import yt_dlp
 
 logger = logging.getLogger(__name__)
 
-STORAGE_BUCKET = "recipe-images"
+STORAGE_BUCKET = "recipe-assets"
 THUMBNAIL_TIMEOUT = 15.0  # seconds
 
 
@@ -66,9 +66,9 @@ class ThumbnailCacheService:
 
                 logger.info(f"Downloaded thumbnail: {len(image_data)} bytes")
 
-            # Generate storage path
-            file_name = f"{recipe_id}-thumbnail.jpg"
-            storage_path = f"{user_id}/{file_name}"
+            # Generate storage path (recipe-centric, not user-centric)
+            file_name = "thumbnail.jpg"
+            storage_path = f"{recipe_id}/{file_name}"
 
             # Upload to Supabase Storage
             self.supabase.storage.from_(STORAGE_BUCKET).upload(

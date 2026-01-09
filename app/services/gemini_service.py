@@ -7,13 +7,14 @@ import asyncio
 import json
 import logging
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 import google.generativeai as genai
 from openai import OpenAI
 
 from app.core.config import get_settings
 from app.domain.exceptions import NotARecipeError
+from app.repositories.category_repository import CategoryRepository
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -44,7 +45,7 @@ class GeminiService:
         }
     }
 
-    def __init__(self):
+    def __init__(self, category_repo: Optional[CategoryRepository] = None):
         """Initialize Gemini service with API key from settings."""
         api_key = settings.GOOGLE_API_KEY
         if not api_key:
@@ -59,7 +60,55 @@ class GeminiService:
         # Initialize OpenAI client for fallback
         self._openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
+        # Category repository for dynamic prompt building
+        self._category_repo = category_repo
+        self._cached_categories: Optional[List[Dict[str, Any]]] = None
+
         logger.info(f"GeminiService initialized with model: {self.MODEL_NAME} (fallback: {self.OPENAI_MODEL})")
+
+    async def _get_category_prompt(self) -> str:
+        """
+        Build the category assignment prompt dynamically from the database.
+        Categories are cached to avoid repeated DB queries.
+
+        Returns:
+            Category assignment instructions for the AI prompt
+        """
+        # Use cached categories if available
+        if self._cached_categories is None and self._category_repo:
+            try:
+                self._cached_categories = await self._category_repo.get_all_with_descriptions()
+            except Exception as e:
+                logger.warning(f"Failed to fetch categories from DB: {e}. Using fallback.")
+                self._cached_categories = []
+
+        if not self._cached_categories:
+            # Fallback to hardcoded list if DB is unavailable
+            return """8. Assign exactly ONE category_slug from this list:
+   - main-dishes: Main course dishes, entrees, primary meals
+   - soups: Soups, stews, broths, chowders
+   - salads: Salads, slaws, fresh vegetable dishes
+   - pasta-noodles: Pasta dishes, noodle dishes, ramen
+   - sandwiches: Sandwiches, wraps, burgers, tacos
+   - appetizers: Starters, small plates, finger foods
+   - apero: Aperitif snacks, charcuterie, cheese boards
+   - desserts: Sweet treats, cakes, pies, ice cream
+   - baked-goods: Breads, muffins, cookies, pastries
+   - beverages: Non-alcoholic drinks, smoothies, juices
+   - cocktails: Alcoholic drinks, mixed drinks, wines
+   - breakfast: Morning meals, eggs, pancakes, cereals
+   - sides: Side dishes, vegetables, rice, potatoes
+   - sauces-dips: Sauces, dressings, condiments, dips
+   - snacks: Light bites, chips, nuts, popcorn
+   - grilled: BBQ, grilled meats, kebabs
+   - bowls-grains: Buddha bowls, grain bowls, quinoa dishes"""
+
+        # Build prompt from database categories
+        lines = ["8. Assign exactly ONE category_slug from this list:"]
+        for cat in self._cached_categories:
+            lines.append(f"   - {cat['slug']}: {cat['description']}")
+
+        return "\n".join(lines)
 
     def _get_generation_config(self, temperature: float = 0.3, max_tokens: int = 4000):
         """Get generation config for Gemini API calls."""
@@ -125,11 +174,18 @@ class GeminiService:
             "servings": self._parse_servings(data.get("servings")),
             "difficulty": data.get("difficulty"),
             "tags": data.get("tags", []),
-            "categories": data.get("categories", []),
+            "category_slug": data.get("category_slug"),  # New: single category slug
+            "categories": data.get("categories", []),  # Keep for backwards compatibility during migration
             "prep_time_minutes": self._parse_time_minutes(data.get("prep_time_minutes")),
             "cook_time_minutes": self._parse_time_minutes(data.get("cook_time_minutes")),
             "resting_time_minutes": self._parse_time_minutes(data.get("resting_time_minutes")),
         }
+
+        # If category_slug not provided but categories array is, use first category
+        if not normalized["category_slug"] and normalized["categories"]:
+            # Map old category to new slug (basic normalization)
+            old_cat = normalized["categories"][0].lower().strip()
+            normalized["category_slug"] = old_cat.replace(" ", "-").replace("&", "-")
 
         # Calculate total_time_minutes from the three timing fields
         prep = normalized["prep_time_minutes"] or 0
@@ -357,14 +413,15 @@ STEP 2 - IF RECIPE, EXTRACT DATA:
    - Do NOT include timer for active tasks like: "chop vegetables", "stir sauce", "mix ingredients"
    - Use null if no timer is needed for that step
 7. Assign appropriate difficulty level (easy, medium, hard)
-8. Add relevant tags and categories
-9. If servings are not specified, make a reasonable estimate
-10. If prep/cook times are not mentioned, estimate based on the recipe complexity
-11. DETECT the primary language of the recipe (en, fr, es, de, it, etc.)
-12. Return ONLY valid JSON, no markdown formatting
+{category_prompt}
+9. Add relevant tags (cuisine, diet, characteristics like "quick", "vegetarian", "comfort-food"). Maximum 10 tags - if more are relevant, pick the most important ones
+10. If servings are not specified, make a reasonable estimate
+11. If prep/cook times are not mentioned, estimate based on the recipe complexity
+12. DETECT the primary language of the recipe (en, fr, es, de, it, etc.)
+13. Return ONLY valid JSON, no markdown formatting
 
 Response format:
-{
+{{
     "is_recipe": true or false,
     "rejection_reason": "Brief explanation if not a recipe (null if is_recipe=true)",
 
@@ -373,19 +430,19 @@ Response format:
     "description": "Brief description (in original language)",
     "language": "en",
     "ingredients": [
-        {"name": "ingredient name", "quantity": 2, "unit": "cups", "notes": "optional notes", "group": "optional group like 'For the sauce'"}
+        {{"name": "ingredient name", "quantity": 2, "unit": "cups", "notes": "optional notes", "group": "optional group like 'For the sauce'"}}
     ],
     "instructions": [
-        {"step_number": 1, "title": "Step title", "description": "Detailed instruction text", "timer_minutes": null or number, "group": "optional group like 'For the sauce' or 'Assembly'"}
+        {{"step_number": 1, "title": "Step title", "description": "Detailed instruction text", "timer_minutes": null or number, "group": "optional group like 'For the sauce' or 'Assembly'"}}
     ],
     "servings": 4,
     "difficulty": "easy|medium|hard",
-    "tags": ["tag1", "tag2"],
-    "categories": ["category1"],
+    "category_slug": "main-dishes",
+    "tags": ["italian", "quick", "vegetarian"],
     "prep_time_minutes": 15,
     "cook_time_minutes": 30,
     "resting_time_minutes": 0
-}
+}}
 
 TIMING DEFINITIONS:
 - prep_time_minutes: Active preparation time before cooking (chopping, mixing, measuring)
@@ -393,6 +450,10 @@ TIMING DEFINITIONS:
 - resting_time_minutes: Passive waiting time where no active work is needed (marinating, rising dough, freezing, cooling, resting meat, chilling, proofing). This is NOT prep or cook time.
 
 NOTE: Do NOT include total_time_minutes - it will be calculated automatically."""
+
+            # Get dynamic category prompt from database
+            category_prompt = await self._get_category_prompt()
+            system_prompt = system_prompt.format(category_prompt=category_prompt)
 
             user_prompt = f"""Parse this recipe from {source_type}:
 
@@ -521,10 +582,12 @@ EXTRACTION RULES:
    - Do NOT include timer for active tasks like: "chop vegetables", "stir sauce", "mix ingredients"
    - Use null if no timer is needed for that step
 7. If servings not visible, estimate based on ingredient quantities
-8. Return ONLY valid JSON, no markdown formatting
+{category_prompt}
+9. Add relevant tags (cuisine, diet, characteristics like "quick", "vegetarian", "comfort-food"). Maximum 10 tags - if more are relevant, pick the most important ones
+10. Return ONLY valid JSON, no markdown formatting
 
 Response format:
-{
+{{
     "content_type": "recipe_card" | "non_food",
     "is_recipe": true or false,
     "rejection_reason": "Brief explanation (if non_food)",
@@ -534,19 +597,19 @@ Response format:
     "description": "Brief description of the dish (in original language)",
     "language": "en",
     "ingredients": [
-        {"name": "ingredient name", "quantity": 2.0, "unit": "cups", "notes": "optional prep notes", "group": "For the soup"}
+        {{"name": "ingredient name", "quantity": 2.0, "unit": "cups", "notes": "optional prep notes", "group": "For the soup"}}
     ],
     "instructions": [
-        {"step_number": 1, "title": "Step title", "description": "Detailed instruction text", "timer_minutes": null or 5, "group": "For the soup"}
+        {{"step_number": 1, "title": "Step title", "description": "Detailed instruction text", "timer_minutes": null or 5, "group": "For the soup"}}
     ],
     "servings": 4,
     "difficulty": "easy|medium|hard",
-    "tags": ["tag1", "tag2"],
-    "categories": ["category1"],
+    "category_slug": "soups",
+    "tags": ["comfort-food", "winter", "vegetarian"],
     "prep_time_minutes": 15,
     "cook_time_minutes": 30,
     "resting_time_minutes": 0
-}
+}}
 
 TIMING DEFINITIONS:
 - prep_time_minutes: Active preparation time before cooking (chopping, mixing, measuring)
@@ -554,6 +617,10 @@ TIMING DEFINITIONS:
 - resting_time_minutes: Passive waiting time where no active work is needed (marinating, rising dough, freezing, cooling, resting meat, chilling, proofing). This is NOT prep or cook time.
 
 NOTE: Do NOT include total_time_minutes - it will be calculated automatically."""
+
+            # Get dynamic category prompt from database
+            category_prompt = await self._get_category_prompt()
+            system_prompt = system_prompt.format(category_prompt=category_prompt)
 
             image_context = f"from {image_count} image(s)" if image_count > 1 else ""
             user_prompt = f"""Extract a recipe from this OCR text {image_context} (may contain OCR errors that need fixing):

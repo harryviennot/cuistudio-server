@@ -17,6 +17,62 @@ class RecipeRepository(BaseRepository):
     def __init__(self, supabase: Client):
         super().__init__(supabase, "recipes")
 
+    async def enrich_with_category(
+        self,
+        recipes: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Enrich recipe(s) with category data (id and slug only).
+
+        Frontend handles translation via i18n files using the slug as the key.
+
+        Args:
+            recipes: List of recipe dicts with category_id field
+
+        Returns:
+            Recipes with 'category' object added (id, slug)
+        """
+        if not recipes:
+            return recipes
+
+        # Collect unique category IDs
+        category_ids = list(set(
+            r["category_id"] for r in recipes
+            if r.get("category_id")
+        ))
+
+        if not category_ids:
+            # No categories to fetch, return recipes as-is
+            for recipe in recipes:
+                recipe["category"] = None
+            return recipes
+
+        try:
+            # Fetch categories (no translations - frontend handles i18n)
+            response = self.supabase.table("categories")\
+                .select("id, slug")\
+                .in_("id", category_ids)\
+                .execute()
+
+            # Build category lookup
+            category_lookup = {
+                cat["id"]: {"id": cat["id"], "slug": cat["slug"]}
+                for cat in response.data or []
+            }
+
+            # Enrich recipes
+            for recipe in recipes:
+                cat_id = recipe.get("category_id")
+                recipe["category"] = category_lookup.get(cat_id) if cat_id else None
+
+            return recipes
+        except Exception as e:
+            logger.warning(f"Failed to enrich recipes with category: {e}")
+            # Return recipes without category enrichment
+            for recipe in recipes:
+                recipe["category"] = None
+            return recipes
+
     @staticmethod
     def normalize_url(url: str) -> str:
         """
@@ -129,11 +185,11 @@ class RecipeRepository(BaseRepository):
             query = self.supabase.table(self.table_name)\
                 .select("""
                     id, title, description, image_url,
-                    servings, difficulty, tags, categories,
+                    servings, difficulty, tags, category_id,
                     prep_time_minutes, cook_time_minutes, total_time_minutes,
                     created_by, is_public, fork_count,
                     average_rating, rating_count, total_times_cooked,
-                    created_at
+                    created_at, source_type
                 """)\
                 .eq("created_by", user_id)\
                 .order("created_at", desc=True)\
@@ -157,6 +213,7 @@ class RecipeRepository(BaseRepository):
             query = self.supabase.table(self.table_name)\
                 .select("*")\
                 .eq("is_public", True)\
+                .eq("is_draft", False)\
                 .order("created_at", desc=True)
 
             # Apply additional filters
@@ -165,8 +222,9 @@ class RecipeRepository(BaseRepository):
                     query = query.eq("difficulty", filters["difficulty"])
                 if "tags" in filters and filters["tags"]:
                     query = query.contains("tags", filters["tags"])
-                if "categories" in filters and filters["categories"]:
-                    query = query.contains("categories", filters["categories"])
+                # Filter by category_id (UUID)
+                if "category_id" in filters and filters["category_id"]:
+                    query = query.eq("category_id", filters["category_id"])
 
             response = query.limit(limit).offset(offset).execute()
             return response.data or []
@@ -221,11 +279,11 @@ class RecipeRepository(BaseRepository):
                 query = self.supabase.table(self.table_name)\
                     .select("""
                         id, title, description, image_url,
-                        servings, difficulty, tags, categories,
+                        servings, difficulty, tags, category_id,
                         prep_time_minutes, cook_time_minutes, total_time_minutes,
                         created_by, is_public, fork_count,
                         average_rating, rating_count, total_times_cooked,
-                        created_at
+                        created_at, source_type
                     """)\
                     .or_(f"title.ilike.%{search_query}%,description.ilike.%{search_query}%")
 
@@ -639,4 +697,44 @@ class RecipeRepository(BaseRepository):
             return response.data or []
         except Exception as e:
             logger.error(f"Error fetching recent public recipes: {str(e)}")
+            raise
+
+    async def get_popular_recipes(
+        self,
+        category_id: Optional[str] = None,
+        limit: int = 20,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        Get popular public recipes with optional category filter.
+
+        Popularity is calculated as: (average_rating * rating_count) + total_times_cooked
+        This balances rating quality with engagement metrics.
+
+        Args:
+            category_id: Optional UUID to filter by category
+            limit: Maximum number of recipes to return
+            offset: Number of results to skip for pagination
+
+        Returns:
+            List of recipes ordered by popularity score (highest first)
+        """
+        try:
+            response = self.supabase.rpc(
+                'get_popular_recipes',
+                {
+                    'category_id_param': category_id,
+                    'limit_param': limit,
+                    'offset_param': offset
+                }
+            ).execute()
+
+            recipes = response.data or []
+
+            # Enrich with category data
+            recipes = await self.enrich_with_category(recipes)
+
+            return recipes
+        except Exception as e:
+            logger.error(f"Error fetching popular recipes: {str(e)}")
             raise

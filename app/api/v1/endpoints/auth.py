@@ -950,10 +950,15 @@ async def submit_onboarding(
             )
 
         # Mark onboarding as completed in users table
+        # Also update the user's name if display_name was provided
         user_update = {
             "onboarding_completed": True,
             "updated_at": "now()"
         }
+
+        # Update name if display_name was provided during onboarding
+        if request.display_name:
+            user_update["name"] = request.display_name
 
         user_result = admin_client.from_("users").update(user_update).eq("id", user_id).execute()
 
@@ -1616,8 +1621,10 @@ async def delete_account(
         return MessageResponse(message="Account deleted successfully.")
 
     except Exception as e:
+        import traceback
         logger.error(f"Account deletion error for user {current_user['id']}: {str(e)}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete account. Please contact support."
+            detail="Database error deleting user"
         )

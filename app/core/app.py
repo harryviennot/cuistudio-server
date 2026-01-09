@@ -46,6 +46,14 @@ async def lifespan(app: FastAPI):
         interval_hours=settings.TEMP_VIDEO_CLEANUP_INTERVAL_HOURS
     )
 
+    # Start popular recipes cache refresh scheduler (every 4 hours)
+    from app.core.cache_refresh import start_cache_refresh_scheduler
+    cache_refresh_scheduler = start_cache_refresh_scheduler(
+        supabase_url=settings.SUPABASE_URL,
+        supabase_key=settings.SUPABASE_SECRET_KEY,
+        interval_hours=4
+    )
+
     logger.info("Application startup complete")
 
     yield
@@ -54,6 +62,10 @@ async def lifespan(app: FastAPI):
     if cleanup_scheduler:
         cleanup_scheduler.shutdown(wait=False)
         logger.info("Cleanup scheduler stopped")
+
+    if cache_refresh_scheduler:
+        cache_refresh_scheduler.shutdown(wait=False)
+        logger.info("Cache refresh scheduler stopped")
 
     logger.info("Shutting down event broadcaster...")
     await shutdown_event_broadcaster()

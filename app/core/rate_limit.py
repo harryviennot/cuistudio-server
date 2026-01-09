@@ -9,9 +9,9 @@ import logging
 from collections import defaultdict
 from typing import Dict, List
 
-from fastapi import Request, HTTPException, status
+from fastapi import Request, status
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from starlette.responses import Response, JSONResponse
 
 logger = logging.getLogger(__name__)
 
@@ -122,9 +122,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                     f"Extraction rate limit exceeded for {client_id}, "
                     f"retry after {retry_after}s"
                 )
-                raise HTTPException(
+                return JSONResponse(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Extraction rate limit exceeded. Please wait before trying again.",
+                    content={"detail": "Extraction rate limit exceeded. Please wait before trying again."},
                     headers={"Retry-After": str(retry_after)}
                 )
 
@@ -137,9 +137,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             logger.warning(
                 f"Rate limit exceeded for {client_id}, retry after {retry_after}s"
             )
-            raise HTTPException(
+            return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Rate limit exceeded. Please slow down.",
+                content={"detail": "Rate limit exceeded. Please slow down."},
                 headers={"Retry-After": str(retry_after)}
             )
 

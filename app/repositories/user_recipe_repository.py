@@ -217,14 +217,7 @@ class UserRecipeRepository(BaseRepository):
         """
         try:
             response = self.supabase.table(self.table_name)\
-                .select("""
-                    *,
-                    recipes!inner(
-                        id, title, description, image_url,
-                        servings, difficulty, tags,
-                        source_type, is_public, created_at
-                    )
-                """)\
+                .select("*, recipes!inner(*)")\
                 .eq("user_id", user_id)\
                 .eq("was_extracted", True)\
                 .order("created_at", desc=True)\

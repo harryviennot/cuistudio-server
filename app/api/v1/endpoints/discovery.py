@@ -22,6 +22,7 @@ from app.api.v1.schemas.recipe import (
     TrendingRecipeResponse,
     UserCookingHistoryItemResponse,
     UserRecipeDataResponse,
+    RecipeCategoryResponse,
 )
 from app.api.v1.schemas.discovery import (
     MostExtractedRecipeResponse,
@@ -50,11 +51,18 @@ def _transform_recipe_for_response(
         user_data: Optional user-specific data (is_favorite, rating, etc.)
     """
     # Build timings object from individual columns
+    # For discovery endpoints, use prep + cook time only (exclude resting time)
+    # This prevents long resting times (e.g., marinating, fermentation) from
+    # discouraging users on the home page where the time isn't explained
     if recipe.get("prep_time_minutes") or recipe.get("cook_time_minutes") or recipe.get("total_time_minutes"):
+        prep = recipe.get("prep_time_minutes") or 0
+        cook = recipe.get("cook_time_minutes") or 0
+        active_time = prep + cook if (prep or cook) else recipe.get("total_time_minutes")
+
         recipe["timings"] = RecipeTimings(
             prep_time_minutes=recipe.get("prep_time_minutes"),
             cook_time_minutes=recipe.get("cook_time_minutes"),
-            total_time_minutes=recipe.get("total_time_minutes")
+            total_time_minutes=active_time
         )
     else:
         recipe["timings"] = None
@@ -80,6 +88,16 @@ def _transform_recipe_for_response(
     # Ensure contributors is a list (even if empty)
     if not recipe.get("contributors"):
         recipe["contributors"] = []
+
+    # Handle category data (enriched by enrich_with_category)
+    if recipe.get("category"):
+        cat = recipe["category"]
+        recipe["category"] = RecipeCategoryResponse(
+            id=cat["id"],
+            slug=cat["slug"]
+        )
+    else:
+        recipe["category"] = None
 
     # Attach user-specific data if available
     if user_data:
@@ -155,6 +173,9 @@ async def get_trending_recipes(
             limit=limit,
             offset=offset
         )
+
+        # Batch enrich categories (avoids N+1 queries)
+        trending_recipes = await repo.enrich_with_category(trending_recipes)
 
         # Batch fetch user data if authenticated
         user_id = current_user["id"] if current_user else None
@@ -270,6 +291,9 @@ async def get_most_extracted_recipes(
             offset=offset
         )
 
+        # Batch enrich categories (avoids N+1 queries)
+        extracted_recipes = await repo.enrich_with_category(extracted_recipes)
+
         # Batch fetch user data if authenticated
         user_id = current_user["id"] if current_user else None
         recipe_ids = [r["id"] for r in extracted_recipes]
@@ -314,6 +338,9 @@ async def get_highest_rated_recipes(
             offset=offset
         )
 
+        # Batch enrich categories (avoids N+1 queries)
+        rated_recipes = await repo.enrich_with_category(rated_recipes)
+
         # Batch fetch user data if authenticated
         user_id = current_user["id"] if current_user else None
         recipe_ids = [r["id"] for r in rated_recipes]
@@ -352,6 +379,9 @@ async def get_recent_recipes(
             offset=offset
         )
 
+        # Batch enrich categories (avoids N+1 queries)
+        recent_recipes = await repo.enrich_with_category(recent_recipes)
+
         # Batch fetch user data if authenticated
         user_id = current_user["id"] if current_user else None
         recipe_ids = [r["id"] for r in recent_recipes]
@@ -365,3 +395,50 @@ async def get_recent_recipes(
     except Exception as e:
         logger.error(f"Error fetching recent recipes: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to fetch recent recipes")
+
+
+@router.get("/popular", response_model=List[RecentRecipeResponse])
+async def get_popular_recipes(
+    request: Request,
+    category_id: Optional[str] = Query(None, description="Filter by category UUID"),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+    supabase: Client = Depends(get_supabase_client)
+):
+    """
+    Get popular public recipes, optionally filtered by category.
+
+    Recipes are sorted by a popularity score that combines rating quality with engagement:
+    - popularity_score = (average_rating * rating_count) + total_times_cooked
+
+    This balances highly-rated recipes with frequently-cooked recipes.
+
+    Query parameters:
+    - category_id: Optional UUID to filter recipes by category
+    - limit: Maximum results per page (default: 20)
+    - offset: Pagination offset (default: 0)
+
+    If authenticated, also includes user-specific data (is_favorite, rating, etc.)
+    """
+    try:
+        repo = RecipeRepository(supabase)
+        popular_recipes = await repo.get_popular_recipes(
+            category_id=category_id,
+            limit=limit,
+            offset=offset
+        )
+
+        # Batch fetch user data if authenticated
+        user_id = current_user["id"] if current_user else None
+        recipe_ids = [r["id"] for r in popular_recipes]
+        user_data_map = await _get_user_data_map(user_id, recipe_ids, request)
+
+        # Transform each recipe to match the response schema
+        return [
+            _transform_recipe_for_response(recipe, user_data_map.get(recipe["id"]))
+            for recipe in popular_recipes
+        ]
+    except Exception as e:
+        logger.error(f"Error fetching popular recipes: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch popular recipes")

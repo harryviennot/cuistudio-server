@@ -1,7 +1,7 @@
 """
 Recipe API schemas
 """
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 from datetime import datetime
 
@@ -9,21 +9,33 @@ from app.domain.models import Ingredient, Instruction, RecipeTimings
 from app.domain.enums import SourceType, DifficultyLevel
 
 
+# ============= Embedded Category Schema =============
+
+class RecipeCategoryResponse(BaseModel):
+    """
+    Category info embedded in recipe responses.
+
+    Frontend handles translation via i18n files using the slug as the key.
+    """
+    id: str
+    slug: str
+
+
 # ============= Request Schemas =============
 
 class RecipeCreateRequest(BaseModel):
     """Create recipe request"""
-    title: str = Field(..., min_length=1, max_length=200)
-    description: Optional[str] = None
+    title: str = Field(..., min_length=3, max_length=200)
+    description: Optional[str] = Field(None, max_length=1000)
     image_url: Optional[str] = None
 
     ingredients: List[Ingredient] = Field(default_factory=list)
     instructions: List[Instruction] = Field(default_factory=list)
 
-    servings: Optional[int] = Field(None, ge=1)
+    servings: Optional[int] = Field(None, ge=1, le=100)
     difficulty: Optional[DifficultyLevel] = None
     tags: List[str] = Field(default_factory=list)
-    categories: List[str] = Field(default_factory=list)
+    category_slug: Optional[str] = None  # Single category slug
 
     timings: Optional[RecipeTimings] = None
 
@@ -32,24 +44,40 @@ class RecipeCreateRequest(BaseModel):
 
     is_public: bool = True
 
+    @field_validator('tags')
+    @classmethod
+    def validate_tags_length(cls, v):
+        """Limit tags to maximum 10 items"""
+        if len(v) > 10:
+            raise ValueError('Maximum 10 tags allowed')
+        return v
+
 
 class RecipeUpdateRequest(BaseModel):
     """Update recipe request"""
-    title: Optional[str] = Field(None, min_length=1, max_length=200)
-    description: Optional[str] = None
+    title: Optional[str] = Field(None, min_length=3, max_length=200)
+    description: Optional[str] = Field(None, max_length=1000)
     image_url: Optional[str] = None
 
     ingredients: Optional[List[Ingredient]] = None
     instructions: Optional[List[Instruction]] = None
 
-    servings: Optional[int] = Field(None, ge=1)
+    servings: Optional[int] = Field(None, ge=1, le=100)
     difficulty: Optional[DifficultyLevel] = None
     tags: Optional[List[str]] = None
-    categories: Optional[List[str]] = None
+    category_slug: Optional[str] = None  # Single category slug
 
     timings: Optional[RecipeTimings] = None
 
     is_public: Optional[bool] = None
+
+    @field_validator('tags')
+    @classmethod
+    def validate_tags_length(cls, v):
+        """Limit tags to maximum 10 items"""
+        if v is not None and len(v) > 10:
+            raise ValueError('Maximum 10 tags allowed')
+        return v
 
 
 class RecipeForkRequest(BaseModel):
@@ -92,8 +120,9 @@ class RecipeSearchRequest(BaseModel):
 
 class RecipeContributorResponse(BaseModel):
     """Recipe contributor info"""
-    user_id: str
+    user_id: Optional[str] = None
     user_email: Optional[str] = None
+    display_name: Optional[str] = None
     contribution_type: str
     order: int
 
@@ -111,7 +140,7 @@ class RecipeResponse(BaseModel):
     servings: Optional[int] = None
     difficulty: Optional[DifficultyLevel] = None
     tags: List[str]
-    categories: List[str]
+    category: Optional[RecipeCategoryResponse] = None  # Single category object
 
     timings: Optional[RecipeTimings] = None
 
@@ -167,7 +196,7 @@ class RecipeListItemResponse(BaseModel):
     servings: Optional[int] = None
     difficulty: Optional[DifficultyLevel] = None
     tags: List[str]
-    categories: List[str]
+    category: Optional[RecipeCategoryResponse] = None  # Single category object
 
     timings: Optional[RecipeTimings] = None
 

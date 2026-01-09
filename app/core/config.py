@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     # Sentry
     SENTRY_DSN: Optional[str] = None
 
+    # RevenueCat
+    REVENUECAT_WEBHOOK_SECRET: Optional[str] = None
+    REVENUECAT_API_KEY: Optional[str] = None  # Secret API key for fetching customer info
+    REVENUECAT_PROJECT_ID: Optional[str] = None  # Project ID from RevenueCat dashboard
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

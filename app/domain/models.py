@@ -9,7 +9,11 @@ from app.domain.enums import (
     DifficultyLevel,
     PermissionLevel,
     ContributionType,
-    FeaturedType
+    FeaturedType,
+    SubscriptionStatus,
+    CreditType,
+    CreditTransactionReason,
+    ReferralSource,
 )
 
 
@@ -29,7 +33,7 @@ class Instruction(BaseModel):
     step_number: int
     title: str
     description: str
-    timer_minutes: Optional[int] = None  # If this step requires a timer
+    timer_minutes: Optional[float] = None  # If this step requires a timer (supports decimals like 0.5 for 30 seconds)
     group: Optional[str] = None  # e.g., "For the sauce", "Assembly"
 
 
@@ -241,3 +245,120 @@ class ExtractionJob(BaseModel):
 
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+# ============= Subscription Models =============
+
+class UserSubscription(BaseModel):
+    """User subscription status synced from RevenueCat"""
+    id: Optional[str] = None
+    user_id: str
+    revenuecat_customer_id: str
+    product_id: Optional[str] = None  # e.g., 'cuisto_pro_monthly'
+    entitlement_id: Optional[str] = None  # e.g., 'pro'
+    is_active: bool = False
+    expires_at: Optional[datetime] = None
+    original_purchase_date: Optional[datetime] = None
+    is_trial: bool = False
+
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class SubscriptionStatusResponse(BaseModel):
+    """Response for subscription status endpoint"""
+    status: SubscriptionStatus
+    is_premium: bool
+    is_trialing: bool
+    product_id: Optional[str] = None
+    expires_at: Optional[datetime] = None
+    will_renew: bool = False
+
+
+# ============= Credits Models =============
+
+class UserCredits(BaseModel):
+    """User credit balance"""
+    id: Optional[str] = None
+    user_id: str
+    standard_credits: int = 5
+    referral_credits: int = 0
+    credits_reset_at: Optional[datetime] = None
+    first_week_ends_at: Optional[datetime] = None
+
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class CreditsResponse(BaseModel):
+    """Response for credits endpoint"""
+    standard_credits: int
+    referral_credits: int
+    total_credits: int
+    is_first_week: bool
+    next_reset_at: Optional[datetime] = None
+    can_extract: bool
+    is_premium: bool
+
+
+class ReferralCreditGrant(BaseModel):
+    """Individual referral credit grant with expiry"""
+    id: Optional[str] = None
+    user_id: str
+    amount: int
+    remaining: int
+    source: ReferralSource
+    expires_at: datetime
+
+    created_at: Optional[datetime] = None
+
+
+class CreditTransaction(BaseModel):
+    """Credit transaction log entry"""
+    id: Optional[str] = None
+    user_id: str
+    amount: int  # Positive = add, negative = deduct
+    credit_type: CreditType
+    reason: CreditTransactionReason
+    extraction_job_id: Optional[str] = None
+    balance_after: int
+
+    created_at: Optional[datetime] = None
+
+
+# ============= Referral Models =============
+
+class ReferralCode(BaseModel):
+    """User's referral code"""
+    id: Optional[str] = None
+    user_id: str
+    code: str
+    uses_count: int = 0
+
+    created_at: Optional[datetime] = None
+
+
+class ReferralRedemption(BaseModel):
+    """Record of a referral code being used"""
+    id: Optional[str] = None
+    referrer_user_id: str
+    referee_user_id: str
+    referral_code_id: str
+    credits_awarded: int = 5
+
+    created_at: Optional[datetime] = None
+
+
+class ReferralStats(BaseModel):
+    """User's referral statistics"""
+    code: str
+    uses_count: int
+    total_credits_earned: int
+    pending_referral_credits: int  # Credits not yet expired
+
+
+class ReferralCodeValidation(BaseModel):
+    """Response for referral code validation"""
+    is_valid: bool
+    message: str
+    referrer_name: Optional[str] = None

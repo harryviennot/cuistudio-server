@@ -14,6 +14,8 @@ from app.core.security import get_current_user, get_authenticated_user
 from app.core.events import get_event_broadcaster
 from app.services.extraction_service import ExtractionService
 from app.services.upload_service import UploadService
+from app.services.credit_service import CreditService
+from app.services.subscription_service import SubscriptionService
 from app.api.v1.schemas.extraction import (
     ExtractionSubmitRequest,
     ExtractionJobResponse,
@@ -47,9 +49,26 @@ async def submit_extraction(
     detection is performed first. If the video was already extracted,
     the existing recipe data is returned with existing_recipe_id set.
 
+    Requires either:
+    - An active premium subscription, OR
+    - At least 1 extraction credit
+
     Returns a job ID for tracking progress.
     """
     try:
+        # Check if user can extract (subscription or credits)
+        subscription_service = SubscriptionService(admin_client)
+        credit_service = CreditService(admin_client)
+
+        is_premium = await subscription_service.is_premium(current_user["id"])
+        can_extract, reason = await credit_service.can_extract(current_user["id"], is_premium)
+
+        if not can_extract:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="No extraction credits available. Please upgrade to premium or wait for credits to reset."
+            )
+
         # Use user_client for job creation (respects RLS)
         extraction_service = ExtractionService(user_client)
 
@@ -109,8 +128,25 @@ async def submit_image_extraction(
 
     This endpoint combines image upload and extraction submission for better UX.
     Accepts 1-3 images and returns a job ID for tracking extraction progress.
+
+    Requires either:
+    - An active premium subscription, OR
+    - At least 1 extraction credit
     """
     try:
+        # Check if user can extract (subscription or credits)
+        subscription_service = SubscriptionService(admin_client)
+        credit_service = CreditService(admin_client)
+
+        is_premium = await subscription_service.is_premium(current_user["id"])
+        can_extract, reason = await credit_service.can_extract(current_user["id"], is_premium)
+
+        if not can_extract:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="No extraction credits available. Please upgrade to premium or wait for credits to reset."
+            )
+
         # Validate number of images
         if len(files) == 0:
             raise HTTPException(

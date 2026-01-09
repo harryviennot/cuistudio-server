@@ -24,10 +24,12 @@ from app.api.v1.schemas.recipe import (
     RecipeListItemResponse,
     UserRecipeDataResponse,
     RecipeContributorResponse,
+    RecipeCategoryResponse,
     MarkRecipeAseCookedRequest,
     UpdateCookingEventRequest,
     CookingEventResponse,
 )
+from app.repositories.category_repository import CategoryRepository
 from app.api.v1.schemas.collection import (
     SaveRecipeRequest,
     SaveRecipeResponse
@@ -48,6 +50,12 @@ async def create_recipe(
     """Create a new recipe manually"""
     try:
         repo = RecipeRepository(supabase)
+        cat_repo = CategoryRepository(supabase)
+
+        # Resolve category_slug to category_id if provided
+        category_id = None
+        if recipe_data.category_slug:
+            category_id = await cat_repo.get_id_by_slug(recipe_data.category_slug)
 
         # Prepare recipe data
         data = {
@@ -59,7 +67,7 @@ async def create_recipe(
             "servings": recipe_data.servings,
             "difficulty": recipe_data.difficulty.value if recipe_data.difficulty else None,
             "tags": recipe_data.tags,
-            "categories": recipe_data.categories,
+            "category_id": category_id,
             "prep_time_minutes": recipe_data.timings.prep_time_minutes if recipe_data.timings else None,
             "cook_time_minutes": recipe_data.timings.cook_time_minutes if recipe_data.timings else None,
             "total_time_minutes": recipe_data.timings.total_time_minutes if recipe_data.timings else None,
@@ -266,6 +274,9 @@ async def search_recipes_full_text(
 
         recipes = await repo.search_recipes(user_id, q, limit, offset)
 
+        # Batch enrich categories (avoids N+1 queries)
+        recipes = await repo.enrich_with_category(recipes)
+
         # Batch fetch user data if authenticated
         user_data_map = {}
         if user_id and recipes:
@@ -347,7 +358,7 @@ async def list_recipes(
     offset: int = Query(0, ge=0),
     difficulty: Optional[str] = None,
     tags: Optional[str] = None,  # Comma-separated
-    categories: Optional[str] = None,  # Comma-separated
+    category_id: Optional[str] = None,  # Single category UUID
     current_user: Optional[dict] = Depends(get_current_user_optional),
     supabase: Client = Depends(get_supabase_client)
 ):
@@ -360,10 +371,13 @@ async def list_recipes(
             filters["difficulty"] = difficulty
         if tags:
             filters["tags"] = tags.split(",")
-        if categories:
-            filters["categories"] = categories.split(",")
+        if category_id:
+            filters["category_id"] = category_id
 
         recipes = await repo.get_public_recipes(limit, offset, filters)
+
+        # Batch enrich categories (avoids N+1 queries)
+        recipes = await repo.enrich_with_category(recipes)
 
         user_id = current_user["id"] if current_user else None
 
@@ -396,6 +410,9 @@ async def get_my_recipes(
         repo = RecipeRepository(supabase)
         recipes = await repo.get_user_recipes(current_user["id"], limit, offset)
 
+        # Batch enrich categories (avoids N+1 queries)
+        recipes = await repo.enrich_with_category(recipes)
+
         # Batch fetch user data for all recipes in one query (eliminates N+1 problem)
         user_repo = UserRecipeRepository(supabase)
         recipe_ids = [r["id"] for r in recipes]
@@ -416,11 +433,16 @@ async def update_recipe(
     recipe_id: str,
     update_data: RecipeUpdateRequest,
     current_user: dict = Depends(get_authenticated_user),
-    supabase: Client = Depends(get_supabase_client)
+    supabase: Client = Depends(get_supabase_admin_client)
 ):
     """Update a recipe"""
     try:
+        # Log the incoming request data
+        logger.info(f"[UPDATE] Received update_data: {update_data.model_dump()}")
+        logger.info(f"[UPDATE] category_slug field value: {update_data.category_slug!r}")
+
         repo = RecipeRepository(supabase)
+        cat_repo = CategoryRepository(supabase)
 
         # Check ownership or collaboration permission
         recipe = await repo.get_by_id(recipe_id)
@@ -467,8 +489,12 @@ async def update_recipe(
             data["difficulty"] = update_data.difficulty.value
         if update_data.tags is not None:
             data["tags"] = update_data.tags
-        if update_data.categories is not None:
-            data["categories"] = update_data.categories
+        # Handle category_slug -> category_id
+        logger.info(f"[UPDATE] category_slug from request: {update_data.category_slug!r}")
+        if update_data.category_slug is not None:
+            category_id = await cat_repo.get_id_by_slug(update_data.category_slug)
+            logger.info(f"[UPDATE] Resolved category_id: {category_id}")
+            data["category_id"] = category_id
         if update_data.timings is not None:
             data["prep_time_minutes"] = update_data.timings.prep_time_minutes
             data["cook_time_minutes"] = update_data.timings.cook_time_minutes
@@ -476,7 +502,18 @@ async def update_recipe(
         if update_data.is_public is not None:
             data["is_public"] = update_data.is_public
 
+        logger.info(f"[UPDATE] Final data dict being sent to update: {list(data.keys())}")
+        logger.info(f"[UPDATE] category_id in data: {'category_id' in data}, value: {data.get('category_id')}")
         updated_recipe = await repo.update(recipe_id, data)
+
+        # If update didn't return data, fetch the recipe again
+        if not updated_recipe:
+            updated_recipe = await repo.get_by_id(recipe_id)
+            if not updated_recipe:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to retrieve updated recipe"
+                )
 
         return await _format_recipe_response(updated_recipe, current_user["id"], supabase)
 
@@ -577,7 +614,7 @@ async def fork_recipe(
             "servings": original["servings"],
             "difficulty": original["difficulty"],
             "tags": original["tags"],
-            "categories": original["categories"],
+            "category_id": original.get("category_id"),
             "prep_time_minutes": original["prep_time_minutes"],
             "cook_time_minutes": original["cook_time_minutes"],
             "total_time_minutes": original["total_time_minutes"],
@@ -612,6 +649,9 @@ async def get_recipe_forks(
     try:
         repo = RecipeRepository(supabase)
         forks = await repo.get_recipe_forks(recipe_id)
+
+        # Batch enrich categories (avoids N+1 queries)
+        forks = await repo.enrich_with_category(forks)
 
         user_id = current_user["id"] if current_user else None
         return [await _format_list_item_response(f, user_id, supabase) for f in forks]
@@ -879,6 +919,9 @@ async def search_recipes_ai(
         # Sort by rank order
         ranked_recipes.sort(key=lambda r: ranked_ids.index(r["id"]))
 
+        # Batch enrich categories (avoids N+1 queries)
+        ranked_recipes = await repo.enrich_with_category(ranked_recipes)
+
         return [await _format_list_item_response(r, user_id, supabase) for r in ranked_recipes]
 
     except Exception as e:
@@ -891,6 +934,7 @@ async def search_recipes_ai(
 
 # Helper functions
 
+
 async def _format_recipe_response(
     recipe: dict,
     user_id: Optional[str],
@@ -901,7 +945,8 @@ async def _format_recipe_response(
     contributors = recipe.get("contributors", [])
     contributor_responses = [
         RecipeContributorResponse(
-            user_id=c["user_id"],
+            user_id=c.get("user_id"),
+            display_name=c.get("display_name"),
             contribution_type=c["contribution_type"],
             order=c["order"]
         )
@@ -935,6 +980,18 @@ async def _format_recipe_response(
         if video_source:
             video_platform = video_source.get("platform")
 
+    # Get category data if category_id is set
+    category = None
+    if recipe.get("category_id"):
+        repo = RecipeRepository(supabase)
+        enriched = await repo.enrich_with_category([recipe])
+        if enriched and enriched[0].get("category"):
+            cat = enriched[0]["category"]
+            category = RecipeCategoryResponse(
+                id=cat["id"],
+                slug=cat["slug"]
+            )
+
     return RecipeResponse(
         id=recipe["id"],
         title=recipe["title"],
@@ -945,7 +1002,7 @@ async def _format_recipe_response(
         servings=recipe.get("servings"),
         difficulty=recipe.get("difficulty"),
         tags=recipe.get("tags", []),
-        categories=recipe.get("categories", []),
+        category=category,
         timings=timings,
         source_type=recipe["source_type"],
         source_url=recipe.get("source_url"),
@@ -1011,6 +1068,26 @@ async def _format_list_item_response(
         if video_source:
             video_platform = video_source.get("platform")
 
+    # Get category data if pre-enriched or category_id is set
+    category = None
+    if recipe.get("category"):
+        # Already enriched
+        cat = recipe["category"]
+        category = RecipeCategoryResponse(
+            id=cat["id"],
+            slug=cat["slug"]
+        )
+    elif recipe.get("category_id"):
+        # Need to fetch category
+        repo = RecipeRepository(supabase)
+        enriched = await repo.enrich_with_category([recipe])
+        if enriched and enriched[0].get("category"):
+            cat = enriched[0]["category"]
+            category = RecipeCategoryResponse(
+                id=cat["id"],
+                slug=cat["slug"]
+            )
+
     return RecipeListItemResponse(
         id=recipe["id"],
         title=recipe["title"],
@@ -1019,7 +1096,7 @@ async def _format_list_item_response(
         servings=recipe.get("servings"),
         difficulty=recipe.get("difficulty"),
         tags=recipe.get("tags", []),
-        categories=recipe.get("categories", []),
+        category=category,
         timings=timings,
         created_by=recipe["created_by"],
         is_public=recipe["is_public"],
