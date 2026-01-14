@@ -299,6 +299,115 @@ class RecipeRepository(BaseRepository):
                 logger.error(f"Fallback search also failed: {str(fallback_error)}")
                 raise
 
+    async def search_recipes_filtered(
+        self,
+        user_id: Optional[str],
+        search_query: str,
+        limit: int = 20,
+        offset: int = 0,
+        difficulty: Optional[str] = None,
+        category_id: Optional[str] = None,
+        min_time: Optional[int] = None,
+        max_time: Optional[int] = None,
+        sort_by: str = "relevance",
+        library_only: bool = False
+    ) -> List[Dict[str, Any]]:
+        """
+        Search recipes with filters and sorting options.
+
+        This method extends the basic search_recipes() with additional filtering
+        capabilities and flexible sorting options.
+
+        Args:
+            user_id: Optional user ID to include user's own recipes and library filtering
+            search_query: Natural language search query
+            limit: Maximum number of results to return
+            offset: Number of results to skip for pagination
+            difficulty: Filter by difficulty level ("easy", "medium", "hard")
+            category_id: Filter by category UUID
+            min_time: Minimum total_time_minutes
+            max_time: Maximum total_time_minutes
+            sort_by: Sort option ("relevance", "recent", "rating", "cook_count", "time")
+            library_only: If True, only return user's library recipes (favorites or extracted)
+
+        Returns:
+            List of recipes matching filters, sorted by the specified option
+        """
+        try:
+            # First, get results from basic full-text search
+            recipes = await self.search_recipes(user_id, search_query, limit=100, offset=0)
+
+            # If library_only, we need to fetch user_recipe_data to filter
+            if library_only and user_id:
+                # Get all recipe IDs from search results
+                recipe_ids = [r["id"] for r in recipes]
+
+                if not recipe_ids:
+                    return []
+
+                # Fetch user_recipe_data for these recipes
+                user_data_response = self.supabase.table("user_recipe_data")\
+                    .select("recipe_id, is_favorite, was_extracted")\
+                    .eq("user_id", user_id)\
+                    .in_("recipe_id", recipe_ids)\
+                    .execute()
+
+                # Create set of library recipe IDs (favorites or extracted)
+                library_recipe_ids = set()
+                for row in (user_data_response.data or []):
+                    if row.get("is_favorite") or row.get("was_extracted"):
+                        library_recipe_ids.add(row["recipe_id"])
+
+                # Filter recipes to only library items
+                recipes = [r for r in recipes if r["id"] in library_recipe_ids]
+
+            # Apply difficulty filter
+            if difficulty:
+                recipes = [r for r in recipes if r.get("difficulty") == difficulty]
+
+            # Apply category filter
+            if category_id:
+                recipes = [r for r in recipes if r.get("category_id") == category_id]
+
+            # Apply time filters
+            if min_time is not None:
+                recipes = [r for r in recipes if r.get("total_time_minutes") and r["total_time_minutes"] >= min_time]
+
+            if max_time is not None:
+                recipes = [r for r in recipes if r.get("total_time_minutes") and r["total_time_minutes"] <= max_time]
+
+            # Apply sorting
+            if sort_by == "recent":
+                # Sort by created_at DESC
+                recipes.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+            elif sort_by == "rating":
+                # Sort by average_rating DESC, then rating_count DESC
+                recipes.sort(
+                    key=lambda r: (
+                        r.get("average_rating") or 0,
+                        r.get("rating_count") or 0
+                    ),
+                    reverse=True
+                )
+            elif sort_by == "cook_count":
+                # Sort by total_times_cooked DESC
+                recipes.sort(key=lambda r: r.get("total_times_cooked", 0), reverse=True)
+            elif sort_by == "time":
+                # Sort by total_time_minutes ASC (quickest first)
+                # Put recipes with no time at the end
+                recipes_with_time = [r for r in recipes if r.get("total_time_minutes")]
+                recipes_without_time = [r for r in recipes if not r.get("total_time_minutes")]
+                recipes_with_time.sort(key=lambda r: r["total_time_minutes"])
+                recipes = recipes_with_time + recipes_without_time
+            # else: sort_by == "relevance" - already sorted by RPC function
+
+            # Apply pagination after filtering and sorting
+            return recipes[offset:offset + limit]
+
+        except Exception as e:
+            logger.error(f"Error in search_recipes_filtered: {str(e)}")
+            raise
+
     async def fork_recipe(
         self,
         original_recipe_id: str,

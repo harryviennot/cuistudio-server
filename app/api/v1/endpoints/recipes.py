@@ -254,25 +254,67 @@ async def search_recipes_full_text(
     q: str = Query(..., min_length=1, description="Search query"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    difficulty: Optional[str] = Query(None, regex="^(easy|medium|hard)$", description="Filter by difficulty level"),
+    category_slug: Optional[str] = Query(None, description="Filter by category slug"),
+    min_time: Optional[int] = Query(None, ge=0, description="Minimum total cooking time in minutes"),
+    max_time: Optional[int] = Query(None, ge=0, description="Maximum total cooking time in minutes"),
+    sort_by: str = Query("relevance", regex="^(relevance|recent|rating|cook_count|time)$", description="Sort order"),
+    library_only: bool = Query(False, description="Only return user's library recipes (favorites or extracted)"),
     current_user: Optional[dict] = Depends(get_current_user_optional),
     supabase: Client = Depends(get_supabase_client)
 ):
     """
-    Full-text search recipes using natural language queries.
+    Full-text search recipes with filters and sorting.
 
     Uses PostgreSQL full-text search with language-aware stemming and relevance ranking.
-    Results are sorted by relevance score (highest first).
 
-    Examples:
+    Query Examples:
     - "chicken pasta" - finds recipes with chicken and pasta
     - "quick dinner" - finds quick dinner recipes
     - "grilled vegetables" - finds grilled veggie recipes (with stemming)
+
+    Filters:
+    - difficulty: Filter by "easy", "medium", or "hard"
+    - category_slug: Filter by category (e.g., "breakfast", "dessert")
+    - min_time/max_time: Filter by cooking time range
+    - library_only: Only show user's saved/extracted recipes
+
+    Sorting:
+    - relevance: Sort by search relevance (default)
+    - recent: Sort by creation date (newest first)
+    - rating: Sort by average rating (highest first)
+    - cook_count: Sort by popularity (most cooked first)
+    - time: Sort by cooking time (quickest first)
     """
     try:
+        from app.repositories.category_repository import CategoryRepository
+
         repo = RecipeRepository(supabase)
         user_id = current_user["id"] if current_user else None
 
-        recipes = await repo.search_recipes(user_id, q, limit, offset)
+        # Resolve category slug to category_id if provided
+        category_id = None
+        if category_slug:
+            category_repo = CategoryRepository(supabase)
+            category = await category_repo.get_by_slug(category_slug)
+            if category:
+                category_id = category["id"]
+            else:
+                logger.warning(f"Category slug not found: {category_slug}")
+
+        # Use filtered search with all parameters
+        recipes = await repo.search_recipes_filtered(
+            user_id=user_id,
+            search_query=q,
+            limit=limit,
+            offset=offset,
+            difficulty=difficulty,
+            category_id=category_id,
+            min_time=min_time,
+            max_time=max_time,
+            sort_by=sort_by,
+            library_only=library_only
+        )
 
         # Batch enrich categories (avoids N+1 queries)
         recipes = await repo.enrich_with_category(recipes)
