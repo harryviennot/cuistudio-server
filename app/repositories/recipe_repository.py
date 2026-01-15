@@ -270,7 +270,9 @@ class RecipeRepository(BaseRepository):
                 }
             ).execute()
 
-            return response.data or []
+            results = response.data or []
+            logger.info(f"Full-text search for '{search_query}' returned {len(results)} results")
+            return results
         except Exception as e:
             logger.error(f"Error searching recipes with full-text search: {str(e)}")
             # Fallback to basic search if full-text search fails
@@ -281,7 +283,7 @@ class RecipeRepository(BaseRepository):
                         id, title, description, image_url,
                         servings, difficulty, tags, category_id,
                         prep_time_minutes, cook_time_minutes, total_time_minutes,
-                        created_by, is_public, fork_count,
+                        resting_time_minutes, created_by, is_public, fork_count,
                         average_rating, rating_count, total_times_cooked,
                         created_at, source_type
                     """)\
@@ -306,7 +308,10 @@ class RecipeRepository(BaseRepository):
         limit: int = 20,
         offset: int = 0,
         difficulty: Optional[str] = None,
-        category_id: Optional[str] = None,
+        category_ids: Optional[List[str]] = None,
+        max_prep_time: Optional[int] = None,
+        max_cook_time: Optional[int] = None,
+        max_rest_time: Optional[int] = None,
         min_time: Optional[int] = None,
         max_time: Optional[int] = None,
         sort_by: str = "relevance",
@@ -324,9 +329,12 @@ class RecipeRepository(BaseRepository):
             limit: Maximum number of results to return
             offset: Number of results to skip for pagination
             difficulty: Filter by difficulty level ("easy", "medium", "hard")
-            category_id: Filter by category UUID
-            min_time: Minimum total_time_minutes
-            max_time: Maximum total_time_minutes
+            category_ids: Filter by category UUIDs (OR logic - recipe matches ANY category)
+            max_prep_time: Maximum prep time in minutes
+            max_cook_time: Maximum cook time in minutes
+            max_rest_time: Maximum resting time in minutes
+            min_time: Minimum total_time_minutes (legacy)
+            max_time: Maximum total_time_minutes (legacy)
             sort_by: Sort option ("relevance", "recent", "rating", "cook_count", "time")
             library_only: If True, only return user's library recipes (favorites or extracted)
 
@@ -352,11 +360,16 @@ class RecipeRepository(BaseRepository):
                     .in_("recipe_id", recipe_ids)\
                     .execute()
 
-                # Create set of library recipe IDs (favorites or extracted)
+                # Create set of library recipe IDs (favorites, extracted, or created by user)
                 library_recipe_ids = set()
                 for row in (user_data_response.data or []):
                     if row.get("is_favorite") or row.get("was_extracted"):
                         library_recipe_ids.add(row["recipe_id"])
+
+                # Also include recipes created by the user
+                for recipe in recipes:
+                    if recipe.get("created_by") == user_id:
+                        library_recipe_ids.add(recipe["id"])
 
                 # Filter recipes to only library items
                 recipes = [r for r in recipes if r["id"] in library_recipe_ids]
@@ -365,11 +378,27 @@ class RecipeRepository(BaseRepository):
             if difficulty:
                 recipes = [r for r in recipes if r.get("difficulty") == difficulty]
 
-            # Apply category filter
-            if category_id:
-                recipes = [r for r in recipes if r.get("category_id") == category_id]
+            # Apply category filter (OR logic - recipe matches ANY of the categories)
+            if category_ids:
+                recipes = [r for r in recipes if r.get("category_id") in category_ids]
 
-            # Apply time filters
+            # Apply granular time filters (AND logic - each enabled filter must pass)
+            if max_prep_time is not None:
+                recipes = [r for r in recipes
+                           if r.get("prep_time_minutes") is None
+                           or r["prep_time_minutes"] <= max_prep_time]
+
+            if max_cook_time is not None:
+                recipes = [r for r in recipes
+                           if r.get("cook_time_minutes") is None
+                           or r["cook_time_minutes"] <= max_cook_time]
+
+            if max_rest_time is not None:
+                recipes = [r for r in recipes
+                           if r.get("resting_time_minutes") is None
+                           or r["resting_time_minutes"] <= max_rest_time]
+
+            # Apply legacy total time filters (for backward compatibility)
             if min_time is not None:
                 recipes = [r for r in recipes if r.get("total_time_minutes") and r["total_time_minutes"] >= min_time]
 

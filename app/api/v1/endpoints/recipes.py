@@ -255,9 +255,12 @@ async def search_recipes_full_text(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     difficulty: Optional[str] = Query(None, regex="^(easy|medium|hard)$", description="Filter by difficulty level"),
-    category_slug: Optional[str] = Query(None, description="Filter by category slug"),
-    min_time: Optional[int] = Query(None, ge=0, description="Minimum total cooking time in minutes"),
-    max_time: Optional[int] = Query(None, ge=0, description="Maximum total cooking time in minutes"),
+    category_slugs: Optional[str] = Query(None, description="Filter by category slugs (comma-separated for OR logic)"),
+    max_prep_time: Optional[int] = Query(None, ge=0, description="Maximum prep time in minutes"),
+    max_cook_time: Optional[int] = Query(None, ge=0, description="Maximum cook time in minutes"),
+    max_rest_time: Optional[int] = Query(None, ge=0, description="Maximum resting time in minutes"),
+    min_time: Optional[int] = Query(None, ge=0, description="Minimum total cooking time in minutes (legacy)"),
+    max_time: Optional[int] = Query(None, ge=0, description="Maximum total cooking time in minutes (legacy)"),
     sort_by: str = Query("relevance", regex="^(relevance|recent|rating|cook_count|time)$", description="Sort order"),
     library_only: bool = Query(False, description="Only return user's library recipes (favorites or extracted)"),
     current_user: Optional[dict] = Depends(get_current_user_optional),
@@ -275,8 +278,9 @@ async def search_recipes_full_text(
 
     Filters:
     - difficulty: Filter by "easy", "medium", or "hard"
-    - category_slug: Filter by category (e.g., "breakfast", "dessert")
-    - min_time/max_time: Filter by cooking time range
+    - category_slugs: Filter by categories (comma-separated, OR logic)
+    - max_prep_time/max_cook_time/max_rest_time: Granular time filters (AND logic)
+    - min_time/max_time: Filter by total cooking time range (legacy)
     - library_only: Only show user's saved/extracted recipes
 
     Sorting:
@@ -292,15 +296,18 @@ async def search_recipes_full_text(
         repo = RecipeRepository(supabase)
         user_id = current_user["id"] if current_user else None
 
-        # Resolve category slug to category_id if provided
-        category_id = None
-        if category_slug:
+        # Resolve category slugs to category_ids (supports multiple, comma-separated)
+        category_ids = []
+        if category_slugs:
             category_repo = CategoryRepository(supabase)
-            category = await category_repo.get_by_slug(category_slug)
-            if category:
-                category_id = category["id"]
-            else:
-                logger.warning(f"Category slug not found: {category_slug}")
+            for slug in category_slugs.split(","):
+                slug = slug.strip()
+                if slug:
+                    category = await category_repo.get_by_slug(slug)
+                    if category:
+                        category_ids.append(category["id"])
+                    else:
+                        logger.warning(f"Category slug not found: {slug}")
 
         # Use filtered search with all parameters
         recipes = await repo.search_recipes_filtered(
@@ -309,7 +316,10 @@ async def search_recipes_full_text(
             limit=limit,
             offset=offset,
             difficulty=difficulty,
-            category_id=category_id,
+            category_ids=category_ids if category_ids else None,
+            max_prep_time=max_prep_time,
+            max_cook_time=max_cook_time,
+            max_rest_time=max_rest_time,
             min_time=min_time,
             max_time=max_time,
             sort_by=sort_by,
