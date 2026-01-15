@@ -336,7 +336,23 @@ async def search_recipes_full_text(
             recipe_ids = [r["id"] for r in recipes]
             user_data_map = await user_repo.get_user_data_for_recipes(user_id, recipe_ids)
 
-        return [await _format_list_item_response(r, user_id, supabase, user_data_map.get(r["id"])) for r in recipes]
+        # Batch fetch video sources (avoids N+1 queries)
+        video_sources_map = {}
+        if recipes:
+            from app.repositories.video_source_repository import VideoSourceRepository
+            video_recipe_ids = [r["id"] for r in recipes if r.get("source_type") in ("video", "link")]
+            if video_recipe_ids:
+                video_repo = VideoSourceRepository(supabase)
+                video_sources_map = await video_repo.get_by_recipe_ids(video_recipe_ids)
+
+        return [
+            await _format_list_item_response(
+                r, user_id, supabase,
+                user_data_map.get(r["id"]),
+                video_sources_map.get(r["id"])
+            )
+            for r in recipes
+        ]
 
     except Exception as e:
         logger.error(f"Error searching recipes with full-text search: {str(e)}")
@@ -440,7 +456,23 @@ async def list_recipes(
             recipe_ids = [r["id"] for r in recipes]
             user_data_map = await user_repo.get_user_data_for_recipes(user_id, recipe_ids)
 
-        return [await _format_list_item_response(r, user_id, supabase, user_data_map.get(r["id"])) for r in recipes]
+        # Batch fetch video sources (avoids N+1 queries)
+        video_sources_map = {}
+        if recipes:
+            from app.repositories.video_source_repository import VideoSourceRepository
+            video_recipe_ids = [r["id"] for r in recipes if r.get("source_type") in ("video", "link")]
+            if video_recipe_ids:
+                video_repo = VideoSourceRepository(supabase)
+                video_sources_map = await video_repo.get_by_recipe_ids(video_recipe_ids)
+
+        return [
+            await _format_list_item_response(
+                r, user_id, supabase,
+                user_data_map.get(r["id"]),
+                video_sources_map.get(r["id"])
+            )
+            for r in recipes
+        ]
 
     except Exception as e:
         logger.error(f"Error listing recipes: {str(e)}")
@@ -470,7 +502,23 @@ async def get_my_recipes(
         recipe_ids = [r["id"] for r in recipes]
         user_data_map = await user_repo.get_user_data_for_recipes(current_user["id"], recipe_ids)
 
-        return [await _format_list_item_response(r, current_user["id"], supabase, user_data_map.get(r["id"])) for r in recipes]
+        # Batch fetch video sources (avoids N+1 queries)
+        video_sources_map = {}
+        if recipes:
+            from app.repositories.video_source_repository import VideoSourceRepository
+            video_recipe_ids = [r["id"] for r in recipes if r.get("source_type") in ("video", "link")]
+            if video_recipe_ids:
+                video_repo = VideoSourceRepository(supabase)
+                video_sources_map = await video_repo.get_by_recipe_ids(video_recipe_ids)
+
+        return [
+            await _format_list_item_response(
+                r, current_user["id"], supabase,
+                user_data_map.get(r["id"]),
+                video_sources_map.get(r["id"])
+            )
+            for r in recipes
+        ]
 
     except Exception as e:
         logger.error(f"Error getting user recipes: {str(e)}")
@@ -1078,7 +1126,8 @@ async def _format_list_item_response(
     recipe: dict,
     user_id: Optional[str],
     supabase: Client,
-    user_recipe_data: Optional[Dict[str, Any]] = None
+    user_recipe_data: Optional[Dict[str, Any]] = None,
+    video_source: Optional[Dict[str, Any]] = None
 ) -> RecipeListItemResponse:
     """
     Format recipe dict into RecipeListItemResponse
@@ -1088,6 +1137,7 @@ async def _format_list_item_response(
         user_id: Current user ID (if authenticated)
         supabase: Supabase client
         user_recipe_data: Pre-fetched user data (optional, for batch operations)
+        video_source: Pre-fetched video source data (optional, for batch operations)
     """
     # Get user data if authenticated
     user_rating = None
@@ -1113,12 +1163,16 @@ async def _format_list_item_response(
 
     # Get video platform if recipe is from a video
     video_platform = None
-    if recipe.get("source_type") in ("video", "link"):
+    if video_source:
+        # Use pre-fetched video source (batch operation)
+        video_platform = video_source.get("platform")
+    elif recipe.get("source_type") in ("video", "link"):
+        # Fallback to single query if not pre-fetched (backwards compatibility)
         from app.repositories.video_source_repository import VideoSourceRepository
         video_repo = VideoSourceRepository(supabase)
-        video_source = await video_repo.get_by_recipe(recipe["id"])
-        if video_source:
-            video_platform = video_source.get("platform")
+        vs = await video_repo.get_by_recipe(recipe["id"])
+        if vs:
+            video_platform = vs.get("platform")
 
     # Get category data if pre-enriched or category_id is set
     category = None

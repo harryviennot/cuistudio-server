@@ -237,7 +237,14 @@ class RecipeRepository(BaseRepository):
         user_id: Optional[str],
         search_query: str,
         limit: int = 20,
-        offset: int = 0
+        offset: int = 0,
+        difficulty: Optional[str] = None,
+        category_ids: Optional[List[str]] = None,
+        max_prep_time: Optional[int] = None,
+        max_cook_time: Optional[int] = None,
+        max_rest_time: Optional[int] = None,
+        min_time: Optional[int] = None,
+        max_time: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
         Search recipes using PostgreSQL full-text search with language-aware dictionaries.
@@ -250,23 +257,34 @@ class RecipeRepository(BaseRepository):
             search_query: Natural language search query (e.g., "chicken pasta", "grilled vegetables")
             limit: Maximum number of results to return
             offset: Number of results to skip for pagination
+            difficulty: Filter by difficulty level ("easy", "medium", "hard")
+            category_ids: Filter by category UUIDs (OR logic)
+            max_prep_time: Maximum prep time in minutes
+            max_cook_time: Maximum cook time in minutes
+            max_rest_time: Maximum resting time in minutes
+            min_time: Minimum total_time_minutes
+            max_time: Maximum total_time_minutes
 
         Returns:
             List of recipes sorted by relevance score
         """
         try:
             # Use RPC to call a custom function for full-text search with ranking
-            # This allows us to use ts_rank and plainto_tsquery which aren't directly
-            # available in Supabase's query builder
-
-            # Build the RPC call
+            # All filtering is done in the database for optimal performance
             response = self.supabase.rpc(
                 'search_recipes_full_text',
                 {
                     'search_query': search_query,
                     'user_id_param': user_id,
                     'limit_param': limit,
-                    'offset_param': offset
+                    'offset_param': offset,
+                    'difficulty_param': difficulty,
+                    'category_ids_param': category_ids,
+                    'max_prep_time_param': max_prep_time,
+                    'max_cook_time_param': max_cook_time,
+                    'max_rest_time_param': max_rest_time,
+                    'min_total_time_param': min_time,
+                    'max_total_time_param': max_time
                 }
             ).execute()
 
@@ -295,6 +313,12 @@ class RecipeRepository(BaseRepository):
                 else:
                     query = query.eq("is_public", True)
 
+                # Apply filters in fallback mode
+                if difficulty:
+                    query = query.eq("difficulty", difficulty)
+                if category_ids:
+                    query = query.in_("category_id", category_ids)
+
                 response = query.limit(limit).offset(offset).execute()
                 return response.data or []
             except Exception as fallback_error:
@@ -320,8 +344,9 @@ class RecipeRepository(BaseRepository):
         """
         Search recipes with filters and sorting options.
 
-        This method extends the basic search_recipes() with additional filtering
-        capabilities and flexible sorting options.
+        Most filters are now applied in the database for better performance.
+        Only library_only filtering and non-relevance sorting are done in Python
+        (since they require user-specific data or complex sorting logic).
 
         Args:
             user_id: Optional user ID to include user's own recipes and library filtering
@@ -342,33 +367,58 @@ class RecipeRepository(BaseRepository):
             List of recipes matching filters, sorted by the specified option
         """
         try:
-            # First, get results from basic full-text search
-            recipes = await self.search_recipes(user_id, search_query, limit=100, offset=0)
+            # Determine if we need to do client-side processing
+            needs_client_processing = library_only or sort_by != "relevance"
 
-            # Check if we need user_recipe_data (for library filtering or custom time filtering)
-            has_time_filters = max_prep_time is not None or max_cook_time is not None or max_rest_time is not None
-            need_user_data = user_id and (library_only or has_time_filters)
+            if not needs_client_processing:
+                # Fast path: all filtering done in database, return directly
+                return await self.search_recipes(
+                    user_id=user_id,
+                    search_query=search_query,
+                    limit=limit,
+                    offset=offset,
+                    difficulty=difficulty,
+                    category_ids=category_ids,
+                    max_prep_time=max_prep_time,
+                    max_cook_time=max_cook_time,
+                    max_rest_time=max_rest_time,
+                    min_time=min_time,
+                    max_time=max_time
+                )
 
-            # Fetch user_recipe_data if needed
-            user_data_map = {}
-            if need_user_data:
+            # Slow path: need client-side processing for library_only or sorting
+            # Fetch more results to account for filtering
+            fetch_limit = 100 if library_only else limit * 3
+
+            recipes = await self.search_recipes(
+                user_id=user_id,
+                search_query=search_query,
+                limit=fetch_limit,
+                offset=0,  # We'll handle pagination after sorting
+                difficulty=difficulty,
+                category_ids=category_ids,
+                max_prep_time=max_prep_time,
+                max_cook_time=max_cook_time,
+                max_rest_time=max_rest_time,
+                min_time=min_time,
+                max_time=max_time
+            )
+
+            # Filter to library items if library_only
+            if library_only and user_id:
                 recipe_ids = [r["id"] for r in recipes]
-
                 if not recipe_ids:
                     return []
 
-                # Fetch user_recipe_data for these recipes (including custom times)
+                # Fetch user_recipe_data for library filtering
                 user_data_response = self.supabase.table("user_recipe_data")\
-                    .select("recipe_id, is_favorite, was_extracted, custom_prep_time_minutes, custom_cook_time_minutes, custom_resting_time_minutes")\
+                    .select("recipe_id, is_favorite, was_extracted")\
                     .eq("user_id", user_id)\
                     .in_("recipe_id", recipe_ids)\
                     .execute()
 
-                # Build map for O(1) lookups
                 user_data_map = {row["recipe_id"]: row for row in (user_data_response.data or [])}
 
-            # Filter to library items if library_only
-            if library_only and user_id:
                 # Create set of library recipe IDs (favorites, extracted, or created by user)
                 library_recipe_ids = set()
                 for recipe_id, data in user_data_map.items():
@@ -383,78 +433,24 @@ class RecipeRepository(BaseRepository):
                 # Filter recipes to only library items
                 recipes = [r for r in recipes if r["id"] in library_recipe_ids]
 
-            # Apply difficulty filter
-            if difficulty:
-                recipes = [r for r in recipes if r.get("difficulty") == difficulty]
-
-            # Apply category filter (OR logic - recipe matches ANY of the categories)
-            if category_ids:
-                recipes = [r for r in recipes if r.get("category_id") in category_ids]
-
-            # Helper to get effective time (custom if set, otherwise original)
-            def get_effective_time(recipe: Dict, time_type: str) -> Optional[int]:
-                recipe_id = recipe["id"]
-                user_data = user_data_map.get(recipe_id, {})
-
-                # Check for custom time first
-                custom_field = f"custom_{time_type}_time_minutes"
-                custom_value = user_data.get(custom_field)
-                if custom_value is not None:
-                    return custom_value
-
-                # Fall back to original recipe time
-                original_field = f"{time_type}_time_minutes" if time_type != "resting" else "resting_time_minutes"
-                return recipe.get(original_field)
-
-            # Apply granular time filters using effective times (custom if set, else original)
-            if max_prep_time is not None:
-                recipes = [r for r in recipes
-                           if get_effective_time(r, "prep") is None
-                           or get_effective_time(r, "prep") <= max_prep_time]
-
-            if max_cook_time is not None:
-                recipes = [r for r in recipes
-                           if get_effective_time(r, "cook") is None
-                           or get_effective_time(r, "cook") <= max_cook_time]
-
-            if max_rest_time is not None:
-                recipes = [r for r in recipes
-                           if get_effective_time(r, "resting") is None
-                           or get_effective_time(r, "resting") <= max_rest_time]
-
-            # Apply legacy total time filters (for backward compatibility)
-            if min_time is not None:
-                recipes = [r for r in recipes if r.get("total_time_minutes") and r["total_time_minutes"] >= min_time]
-
-            if max_time is not None:
-                recipes = [r for r in recipes if r.get("total_time_minutes") and r["total_time_minutes"] <= max_time]
-
-            # Apply sorting
+            # Apply sorting (only if not relevance - relevance is already sorted by DB)
             if sort_by == "recent":
-                # Sort by created_at DESC
                 recipes.sort(key=lambda r: r.get("created_at", ""), reverse=True)
             elif sort_by == "rating":
-                # Sort by average_rating DESC, then rating_count DESC
                 recipes.sort(
-                    key=lambda r: (
-                        r.get("average_rating") or 0,
-                        r.get("rating_count") or 0
-                    ),
+                    key=lambda r: (r.get("average_rating") or 0, r.get("rating_count") or 0),
                     reverse=True
                 )
             elif sort_by == "cook_count":
-                # Sort by total_times_cooked DESC
                 recipes.sort(key=lambda r: r.get("total_times_cooked", 0), reverse=True)
             elif sort_by == "time":
-                # Sort by total_time_minutes ASC (quickest first)
-                # Put recipes with no time at the end
+                # Sort by total_time_minutes ASC (quickest first), nulls last
                 recipes_with_time = [r for r in recipes if r.get("total_time_minutes")]
                 recipes_without_time = [r for r in recipes if not r.get("total_time_minutes")]
                 recipes_with_time.sort(key=lambda r: r["total_time_minutes"])
                 recipes = recipes_with_time + recipes_without_time
-            # else: sort_by == "relevance" - already sorted by RPC function
 
-            # Apply pagination after filtering and sorting
+            # Apply pagination after sorting
             return recipes[offset:offset + limit]
 
         except Exception as e:
