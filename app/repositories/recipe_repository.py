@@ -345,26 +345,35 @@ class RecipeRepository(BaseRepository):
             # First, get results from basic full-text search
             recipes = await self.search_recipes(user_id, search_query, limit=100, offset=0)
 
-            # If library_only, we need to fetch user_recipe_data to filter
-            if library_only and user_id:
-                # Get all recipe IDs from search results
+            # Check if we need user_recipe_data (for library filtering or custom time filtering)
+            has_time_filters = max_prep_time is not None or max_cook_time is not None or max_rest_time is not None
+            need_user_data = user_id and (library_only or has_time_filters)
+
+            # Fetch user_recipe_data if needed
+            user_data_map = {}
+            if need_user_data:
                 recipe_ids = [r["id"] for r in recipes]
 
                 if not recipe_ids:
                     return []
 
-                # Fetch user_recipe_data for these recipes
+                # Fetch user_recipe_data for these recipes (including custom times)
                 user_data_response = self.supabase.table("user_recipe_data")\
-                    .select("recipe_id, is_favorite, was_extracted")\
+                    .select("recipe_id, is_favorite, was_extracted, custom_prep_time_minutes, custom_cook_time_minutes, custom_resting_time_minutes")\
                     .eq("user_id", user_id)\
                     .in_("recipe_id", recipe_ids)\
                     .execute()
 
+                # Build map for O(1) lookups
+                user_data_map = {row["recipe_id"]: row for row in (user_data_response.data or [])}
+
+            # Filter to library items if library_only
+            if library_only and user_id:
                 # Create set of library recipe IDs (favorites, extracted, or created by user)
                 library_recipe_ids = set()
-                for row in (user_data_response.data or []):
-                    if row.get("is_favorite") or row.get("was_extracted"):
-                        library_recipe_ids.add(row["recipe_id"])
+                for recipe_id, data in user_data_map.items():
+                    if data.get("is_favorite") or data.get("was_extracted"):
+                        library_recipe_ids.add(recipe_id)
 
                 # Also include recipes created by the user
                 for recipe in recipes:
@@ -382,21 +391,36 @@ class RecipeRepository(BaseRepository):
             if category_ids:
                 recipes = [r for r in recipes if r.get("category_id") in category_ids]
 
-            # Apply granular time filters (AND logic - each enabled filter must pass)
+            # Helper to get effective time (custom if set, otherwise original)
+            def get_effective_time(recipe: Dict, time_type: str) -> Optional[int]:
+                recipe_id = recipe["id"]
+                user_data = user_data_map.get(recipe_id, {})
+
+                # Check for custom time first
+                custom_field = f"custom_{time_type}_time_minutes"
+                custom_value = user_data.get(custom_field)
+                if custom_value is not None:
+                    return custom_value
+
+                # Fall back to original recipe time
+                original_field = f"{time_type}_time_minutes" if time_type != "resting" else "resting_time_minutes"
+                return recipe.get(original_field)
+
+            # Apply granular time filters using effective times (custom if set, else original)
             if max_prep_time is not None:
                 recipes = [r for r in recipes
-                           if r.get("prep_time_minutes") is None
-                           or r["prep_time_minutes"] <= max_prep_time]
+                           if get_effective_time(r, "prep") is None
+                           or get_effective_time(r, "prep") <= max_prep_time]
 
             if max_cook_time is not None:
                 recipes = [r for r in recipes
-                           if r.get("cook_time_minutes") is None
-                           or r["cook_time_minutes"] <= max_cook_time]
+                           if get_effective_time(r, "cook") is None
+                           or get_effective_time(r, "cook") <= max_cook_time]
 
             if max_rest_time is not None:
                 recipes = [r for r in recipes
-                           if r.get("resting_time_minutes") is None
-                           or r["resting_time_minutes"] <= max_rest_time]
+                           if get_effective_time(r, "resting") is None
+                           or get_effective_time(r, "resting") <= max_rest_time]
 
             # Apply legacy total time filters (for backward compatibility)
             if min_time is not None:

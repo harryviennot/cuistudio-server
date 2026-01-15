@@ -51,7 +51,7 @@ class UserRecipeRepository(BaseRepository):
                 return {}
 
             response = self.supabase.table(self.table_name)\
-                .select("recipe_id, rating, is_favorite, times_cooked, last_cooked_at, custom_prep_time_minutes, custom_cook_time_minutes, custom_difficulty, notes, custom_servings")\
+                .select("recipe_id, rating, is_favorite, times_cooked, last_cooked_at, custom_prep_time_minutes, custom_cook_time_minutes, custom_resting_time_minutes, custom_difficulty, notes, custom_servings, was_extracted")\
                 .eq("user_id", user_id)\
                 .in_("recipe_id", recipe_ids)\
                 .execute()
