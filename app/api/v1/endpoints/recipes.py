@@ -20,6 +20,7 @@ from app.api.v1.schemas.recipe import (
     RecipeTimingsUpdateResponse,
     UserRecipeDataUpdate,
     RecipeSearchRequest,
+    RecipeSearchParams,
     RecipeResponse,
     RecipeListItemResponse,
     UserRecipeDataResponse,
@@ -251,18 +252,7 @@ async def unfavorite_recipe(
 
 @router.get("/search", response_model=List[RecipeListItemResponse])
 async def search_recipes_full_text(
-    q: str = Query(..., min_length=1, description="Search query"),
-    limit: int = Query(20, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    difficulty: Optional[str] = Query(None, regex="^(easy|medium|hard)$", description="Filter by difficulty level"),
-    category_slugs: Optional[str] = Query(None, description="Filter by category slugs (comma-separated for OR logic)"),
-    max_prep_time: Optional[int] = Query(None, ge=0, description="Maximum prep time in minutes"),
-    max_cook_time: Optional[int] = Query(None, ge=0, description="Maximum cook time in minutes"),
-    max_rest_time: Optional[int] = Query(None, ge=0, description="Maximum resting time in minutes"),
-    min_time: Optional[int] = Query(None, ge=0, description="Minimum total cooking time in minutes (legacy)"),
-    max_time: Optional[int] = Query(None, ge=0, description="Maximum total cooking time in minutes (legacy)"),
-    sort_by: str = Query("relevance", regex="^(relevance|recent|rating|cook_count|time)$", description="Sort order"),
-    library_only: bool = Query(False, description="Only return user's library recipes (favorites or extracted)"),
+    params: RecipeSearchParams = Depends(),
     current_user: Optional[dict] = Depends(get_current_user_optional),
     supabase: Client = Depends(get_supabase_client)
 ):
@@ -298,9 +288,9 @@ async def search_recipes_full_text(
 
         # Resolve category slugs to category_ids (supports multiple, comma-separated)
         category_ids = []
-        if category_slugs:
+        if params.category_slugs:
             category_repo = CategoryRepository(supabase)
-            for slug in category_slugs.split(","):
+            for slug in params.category_slugs.split(","):
                 slug = slug.strip()
                 if slug:
                     category = await category_repo.get_by_slug(slug)
@@ -312,18 +302,18 @@ async def search_recipes_full_text(
         # Use filtered search with all parameters
         recipes = await repo.search_recipes_filtered(
             user_id=user_id,
-            search_query=q,
-            limit=limit,
-            offset=offset,
-            difficulty=difficulty,
+            search_query=params.q,
+            limit=params.limit,
+            offset=params.offset,
+            difficulty=params.difficulty,
             category_ids=category_ids if category_ids else None,
-            max_prep_time=max_prep_time,
-            max_cook_time=max_cook_time,
-            max_rest_time=max_rest_time,
-            min_time=min_time,
-            max_time=max_time,
-            sort_by=sort_by,
-            library_only=library_only
+            max_prep_time=params.max_prep_time,
+            max_cook_time=params.max_cook_time,
+            max_rest_time=params.max_rest_time,
+            min_time=params.min_time,
+            max_time=params.max_time,
+            sort_by=params.sort_by,
+            library_only=params.library_only
         )
 
         # Batch enrich categories (avoids N+1 queries)

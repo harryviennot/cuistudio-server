@@ -298,3 +298,38 @@ class CookingEventResponse(BaseModel):
     rating: Optional[float] = None
     cooking_image_url: Optional[str] = None
     duration_minutes: Optional[int] = None
+
+
+# ============= Query Parameter Schemas =============
+
+class RecipeSearchParams(BaseModel):
+    """Query parameters for recipe full-text search endpoint"""
+    # Search
+    q: str = Field(..., min_length=1, description="Search query")
+
+    # Pagination
+    limit: int = Field(20, ge=1, le=100)
+    offset: int = Field(0, ge=0)
+
+    # Content filters
+    difficulty: Optional[str] = Field(
+        None, pattern="^(easy|medium|hard)$", description="Filter by difficulty level"
+    )
+    category_slugs: Optional[str] = Field(
+        None, description="Filter by category slugs (comma-separated for OR logic)"
+    )
+
+    # Time filters
+    max_prep_time: Optional[int] = Field(None, ge=0, description="Maximum prep time in minutes")
+    max_cook_time: Optional[int] = Field(None, ge=0, description="Maximum cook time in minutes")
+    max_rest_time: Optional[int] = Field(None, ge=0, description="Maximum resting time in minutes")
+    min_time: Optional[int] = Field(None, ge=0, description="Minimum total cooking time in minutes (legacy)")
+    max_time: Optional[int] = Field(None, ge=0, description="Maximum total cooking time in minutes (legacy)")
+
+    # Sorting & user-specific
+    sort_by: str = Field(
+        "relevance",
+        pattern="^(relevance|recent|rating|cook_count|time)$",
+        description="Sort order"
+    )
+    library_only: bool = Field(False, description="Only return user's library recipes")
