@@ -237,7 +237,14 @@ class RecipeRepository(BaseRepository):
         user_id: Optional[str],
         search_query: str,
         limit: int = 20,
-        offset: int = 0
+        offset: int = 0,
+        difficulty: Optional[str] = None,
+        category_ids: Optional[List[str]] = None,
+        max_prep_time: Optional[int] = None,
+        max_cook_time: Optional[int] = None,
+        max_rest_time: Optional[int] = None,
+        min_time: Optional[int] = None,
+        max_time: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
         Search recipes using PostgreSQL full-text search with language-aware dictionaries.
@@ -250,27 +257,40 @@ class RecipeRepository(BaseRepository):
             search_query: Natural language search query (e.g., "chicken pasta", "grilled vegetables")
             limit: Maximum number of results to return
             offset: Number of results to skip for pagination
+            difficulty: Filter by difficulty level ("easy", "medium", "hard")
+            category_ids: Filter by category UUIDs (OR logic)
+            max_prep_time: Maximum prep time in minutes
+            max_cook_time: Maximum cook time in minutes
+            max_rest_time: Maximum resting time in minutes
+            min_time: Minimum total_time_minutes
+            max_time: Maximum total_time_minutes
 
         Returns:
             List of recipes sorted by relevance score
         """
         try:
             # Use RPC to call a custom function for full-text search with ranking
-            # This allows us to use ts_rank and plainto_tsquery which aren't directly
-            # available in Supabase's query builder
-
-            # Build the RPC call
+            # All filtering is done in the database for optimal performance
             response = self.supabase.rpc(
                 'search_recipes_full_text',
                 {
                     'search_query': search_query,
                     'user_id_param': user_id,
                     'limit_param': limit,
-                    'offset_param': offset
+                    'offset_param': offset,
+                    'difficulty_param': difficulty,
+                    'category_ids_param': category_ids,
+                    'max_prep_time_param': max_prep_time,
+                    'max_cook_time_param': max_cook_time,
+                    'max_rest_time_param': max_rest_time,
+                    'min_total_time_param': min_time,
+                    'max_total_time_param': max_time
                 }
             ).execute()
 
-            return response.data or []
+            results = response.data or []
+            logger.info(f"Full-text search for '{search_query}' returned {len(results)} results")
+            return results
         except Exception as e:
             logger.error(f"Error searching recipes with full-text search: {str(e)}")
             # Fallback to basic search if full-text search fails
@@ -281,7 +301,7 @@ class RecipeRepository(BaseRepository):
                         id, title, description, image_url,
                         servings, difficulty, tags, category_id,
                         prep_time_minutes, cook_time_minutes, total_time_minutes,
-                        created_by, is_public, fork_count,
+                        resting_time_minutes, created_by, is_public, fork_count,
                         average_rating, rating_count, total_times_cooked,
                         created_at, source_type
                     """)\
@@ -293,11 +313,149 @@ class RecipeRepository(BaseRepository):
                 else:
                     query = query.eq("is_public", True)
 
+                # Apply filters in fallback mode
+                if difficulty:
+                    query = query.eq("difficulty", difficulty)
+                if category_ids:
+                    query = query.in_("category_id", category_ids)
+
                 response = query.limit(limit).offset(offset).execute()
                 return response.data or []
             except Exception as fallback_error:
                 logger.error(f"Fallback search also failed: {str(fallback_error)}")
                 raise
+
+    async def search_recipes_filtered(
+        self,
+        user_id: Optional[str],
+        search_query: str,
+        limit: int = 20,
+        offset: int = 0,
+        difficulty: Optional[str] = None,
+        category_ids: Optional[List[str]] = None,
+        max_prep_time: Optional[int] = None,
+        max_cook_time: Optional[int] = None,
+        max_rest_time: Optional[int] = None,
+        min_time: Optional[int] = None,
+        max_time: Optional[int] = None,
+        sort_by: str = "relevance",
+        library_only: bool = False
+    ) -> List[Dict[str, Any]]:
+        """
+        Search recipes with filters and sorting options.
+
+        Most filters are now applied in the database for better performance.
+        Only library_only filtering and non-relevance sorting are done in Python
+        (since they require user-specific data or complex sorting logic).
+
+        Args:
+            user_id: Optional user ID to include user's own recipes and library filtering
+            search_query: Natural language search query
+            limit: Maximum number of results to return
+            offset: Number of results to skip for pagination
+            difficulty: Filter by difficulty level ("easy", "medium", "hard")
+            category_ids: Filter by category UUIDs (OR logic - recipe matches ANY category)
+            max_prep_time: Maximum prep time in minutes
+            max_cook_time: Maximum cook time in minutes
+            max_rest_time: Maximum resting time in minutes
+            min_time: Minimum total_time_minutes (legacy)
+            max_time: Maximum total_time_minutes (legacy)
+            sort_by: Sort option ("relevance", "recent", "rating", "cook_count", "time")
+            library_only: If True, only return user's library recipes (favorites or extracted)
+
+        Returns:
+            List of recipes matching filters, sorted by the specified option
+        """
+        try:
+            # Determine if we need to do client-side processing
+            needs_client_processing = library_only or sort_by != "relevance"
+
+            if not needs_client_processing:
+                # Fast path: all filtering done in database, return directly
+                return await self.search_recipes(
+                    user_id=user_id,
+                    search_query=search_query,
+                    limit=limit,
+                    offset=offset,
+                    difficulty=difficulty,
+                    category_ids=category_ids,
+                    max_prep_time=max_prep_time,
+                    max_cook_time=max_cook_time,
+                    max_rest_time=max_rest_time,
+                    min_time=min_time,
+                    max_time=max_time
+                )
+
+            # Slow path: need client-side processing for library_only or sorting
+            # Fetch more results to account for filtering
+            fetch_limit = 100 if library_only else limit * 3
+
+            recipes = await self.search_recipes(
+                user_id=user_id,
+                search_query=search_query,
+                limit=fetch_limit,
+                offset=0,  # We'll handle pagination after sorting
+                difficulty=difficulty,
+                category_ids=category_ids,
+                max_prep_time=max_prep_time,
+                max_cook_time=max_cook_time,
+                max_rest_time=max_rest_time,
+                min_time=min_time,
+                max_time=max_time
+            )
+
+            # Filter to library items if library_only
+            if library_only and user_id:
+                recipe_ids = [r["id"] for r in recipes]
+                if not recipe_ids:
+                    return []
+
+                # Fetch user_recipe_data for library filtering
+                user_data_response = self.supabase.table("user_recipe_data")\
+                    .select("recipe_id, is_favorite, was_extracted")\
+                    .eq("user_id", user_id)\
+                    .in_("recipe_id", recipe_ids)\
+                    .execute()
+
+                user_data_map = {row["recipe_id"]: row for row in (user_data_response.data or [])}
+
+                # Create set of library recipe IDs (favorites, extracted, or created by user)
+                library_recipe_ids = set()
+                for recipe_id, data in user_data_map.items():
+                    if data.get("is_favorite") or data.get("was_extracted"):
+                        library_recipe_ids.add(recipe_id)
+
+                # Also include recipes created by the user
+                for recipe in recipes:
+                    if recipe.get("created_by") == user_id:
+                        library_recipe_ids.add(recipe["id"])
+
+                # Filter recipes to only library items
+                recipes = [r for r in recipes if r["id"] in library_recipe_ids]
+
+            # Apply sorting (only if not relevance - relevance is already sorted by DB)
+            if sort_by == "recent":
+                recipes.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+            elif sort_by == "rating":
+                recipes.sort(
+                    key=lambda r: (r.get("average_rating") or 0, r.get("rating_count") or 0),
+                    reverse=True
+                )
+            elif sort_by == "cook_count":
+                recipes.sort(key=lambda r: r.get("total_times_cooked", 0), reverse=True)
+            elif sort_by == "time":
+                # Sort by total_time_minutes ASC (quickest first), nulls last
+                recipes_with_time = [r for r in recipes if r.get("total_time_minutes")]
+                recipes_without_time = [r for r in recipes if not r.get("total_time_minutes")]
+                recipes_with_time.sort(key=lambda r: r["total_time_minutes"])
+                recipes = recipes_with_time + recipes_without_time
+
+            # Apply pagination after sorting
+            return recipes[offset:offset + limit]
+
+        except Exception as e:
+            logger.error(f"Error in search_recipes_filtered: {str(e)}")
+            raise
 
     async def fork_recipe(
         self,

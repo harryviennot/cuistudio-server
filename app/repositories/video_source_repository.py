@@ -212,6 +212,34 @@ class VideoSourceRepository(BaseRepository):
             logger.error(f"Error getting video source by recipe: {str(e)}")
             raise
 
+    async def get_by_recipe_ids(self, recipe_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Batch fetch video sources for multiple recipes.
+        Eliminates N+1 queries when formatting recipe lists.
+
+        Args:
+            recipe_ids: List of recipe IDs to fetch video sources for
+
+        Returns:
+            Dict mapping recipe_id -> video_source record
+        """
+        if not recipe_ids:
+            return {}
+
+        try:
+            response = self.supabase.table(self.table_name)\
+                .select("""
+                    *,
+                    creator:video_creators(*)
+                """)\
+                .in_("recipe_id", recipe_ids)\
+                .execute()
+
+            return {vs["recipe_id"]: vs for vs in (response.data or [])}
+        except Exception as e:
+            logger.error(f"Error batch fetching video sources: {str(e)}")
+            raise
+
     async def get_recipes_by_creator(
         self,
         video_creator_id: str,
