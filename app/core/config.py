@@ -78,6 +78,8 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> List[str]:
         """Parse CORS origins from comma-separated string"""
+        if not self.CORS_ORIGINS:
+            return []
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
 
     @property
