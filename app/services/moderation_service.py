@@ -1273,3 +1273,178 @@ class ModerationService:
         except Exception as e:
             logger.error(f"Error deleting user {user_id}: {str(e)}")
             return None, "An error occurred while deleting the user"
+
+    # =========================================================================
+    # ADMIN RECIPES LIST
+    # =========================================================================
+
+    async def get_admin_recipes_list(
+        self,
+        user_id: Optional[str] = None,
+        search: Optional[str] = None,
+        is_hidden: Optional[bool] = None,
+        limit: int = 50,
+        offset: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Get paginated list of recipes with uploader info for admin panel.
+        Uses the optimized get_admin_recipes_list Supabase function.
+
+        Args:
+            user_id: Filter by uploader user ID (for user detail page)
+            search: Search by recipe title
+            is_hidden: Filter by hidden status
+            limit: Max recipes to return
+            offset: Pagination offset
+
+        Returns:
+            Dictionary with recipes list and total count
+        """
+        try:
+            # Call the optimized Supabase function
+            response = self.supabase.rpc(
+                "get_admin_recipes_list",
+                {
+                    "p_user_id": user_id,
+                    "p_search": search,
+                    "p_is_hidden": is_hidden,
+                    "p_limit": limit,
+                    "p_offset": offset
+                }
+            ).execute()
+
+            if not response.data:
+                return {"recipes": [], "total": 0}
+
+            # Get total from first row (all rows have the same total_count)
+            total = response.data[0]["total_count"] if response.data else 0
+
+            # Transform data to match expected schema
+            recipes = []
+            for row in response.data:
+                recipes.append({
+                    "id": str(row["id"]),
+                    "title": row["title"],
+                    "image_url": row["image_url"],
+                    "source_type": row["source_type"],
+                    "source_url": row["source_url"],
+                    "is_public": row["is_public"],
+                    "is_draft": row["is_draft"],
+                    "is_hidden": row["is_hidden"],
+                    "created_at": row["created_at"],
+                    "created_by": str(row["created_by"]),
+                    "uploader": {
+                        "id": str(row["created_by"]),
+                        "name": row["uploader_name"],
+                        "avatar_url": row["uploader_avatar_url"]
+                    } if row["created_by"] else None
+                })
+
+            return {
+                "recipes": recipes,
+                "total": total
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting admin recipes list: {str(e)}")
+            raise
+
+    async def get_admin_recipe_detail(self, recipe_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get full recipe details for admin view, including moderation info.
+        Admins can view hidden recipes.
+
+        Args:
+            recipe_id: The recipe ID to fetch
+
+        Returns:
+            Full recipe details with uploader and moderation info, or None if not found
+        """
+        try:
+            # Fetch recipe with all fields (including ingredients/instructions JSONB)
+            recipe_response = self.supabase.table("recipes").select(
+                """
+                id, title, description, image_url, source_type, source_url,
+                is_public, is_draft, is_hidden, hidden_at, hidden_reason,
+                created_at, created_by, ingredients, instructions
+                """
+            ).eq("id", recipe_id).execute()
+
+            if not recipe_response.data:
+                return None
+
+            recipe = recipe_response.data[0]
+
+            # Get uploader info using the display name function
+            uploader_info = None
+            if recipe.get("created_by"):
+                uploader_response = self.supabase.rpc(
+                    "get_user_display_name",
+                    {"p_user_id": recipe["created_by"]}
+                ).execute()
+
+                if uploader_response.data:
+                    uploader_info = {
+                        "id": recipe["created_by"],
+                        "name": uploader_response.data,
+                        "avatar_url": None
+                    }
+
+                # Get avatar URL from users table
+                user_response = self.supabase.table("users").select(
+                    "avatar_url"
+                ).eq("id", recipe["created_by"]).execute()
+
+                if user_response.data and uploader_info:
+                    uploader_info["avatar_url"] = user_response.data[0].get("avatar_url")
+
+            # Get hidden_by info if recipe is hidden
+            hidden_by_info = None
+            if recipe.get("is_hidden") and recipe.get("hidden_at"):
+                # Look up who hid the recipe from moderation_actions
+                action_response = self.supabase.table("moderation_actions").select(
+                    "moderator_id"
+                ).eq("target_recipe_id", recipe_id).eq(
+                    "action_type", "hide_recipe"
+                ).order("created_at", desc=True).limit(1).execute()
+
+                if action_response.data:
+                    mod_id = action_response.data[0]["moderator_id"]
+                    mod_name_response = self.supabase.rpc(
+                        "get_user_display_name",
+                        {"p_user_id": mod_id}
+                    ).execute()
+
+                    mod_user_response = self.supabase.table("users").select(
+                        "avatar_url"
+                    ).eq("id", mod_id).execute()
+
+                    hidden_by_info = {
+                        "id": mod_id,
+                        "name": mod_name_response.data if mod_name_response.data else None,
+                        "avatar_url": mod_user_response.data[0].get("avatar_url") if mod_user_response.data else None
+                    }
+
+            return {
+                "id": str(recipe["id"]),
+                "title": recipe["title"],
+                "description": recipe.get("description"),
+                "image_url": recipe.get("image_url"),
+                "source_type": recipe.get("source_type", "unknown"),
+                "source_url": recipe.get("source_url"),
+                "is_public": recipe.get("is_public", True),
+                "is_draft": recipe.get("is_draft", False),
+                "is_hidden": recipe.get("is_hidden", False),
+                "hidden_at": recipe.get("hidden_at"),
+                "hidden_reason": recipe.get("hidden_reason"),
+                "created_at": recipe["created_at"],
+                "created_by": str(recipe["created_by"]),
+                "ingredients": recipe.get("ingredients"),
+                "instructions": recipe.get("instructions"),
+                "uploader": uploader_info,
+                "hidden_by": hidden_by_info
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting admin recipe detail: {str(e)}")
+            raise

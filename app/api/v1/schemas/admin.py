@@ -401,3 +401,58 @@ class HiddenRecipesResponse(BaseModel):
     """Response for hidden recipes list"""
     recipes: List[HiddenRecipeAdmin]
     total: int
+
+
+# =============================================================================
+# ADMIN RECIPES LIST SCHEMAS
+# =============================================================================
+
+
+class AdminRecipeListItem(BaseModel):
+    """Recipe item for admin recipes list"""
+    id: str
+    title: str
+    image_url: Optional[str] = None
+    source_type: str
+    source_url: Optional[str] = None
+    is_public: bool = True
+    is_draft: bool = False
+    is_hidden: bool = False
+    created_at: datetime
+    created_by: str
+
+    # Uploader info
+    uploader: Optional[UserSummaryAdmin] = None
+
+
+class AdminRecipesListResponse(BaseModel):
+    """Response for admin recipes list endpoint"""
+    recipes: List[AdminRecipeListItem]
+    total: int
+
+
+class AdminRecipeDetailResponse(BaseModel):
+    """Full recipe details for admin view with moderation info"""
+    id: str
+    title: str
+    description: Optional[str] = None
+    image_url: Optional[str] = None
+    source_type: str
+    source_url: Optional[str] = None
+    is_public: bool = True
+    is_draft: bool = False
+    is_hidden: bool = False
+    hidden_at: Optional[datetime] = None
+    hidden_reason: Optional[str] = None
+    created_at: datetime
+    created_by: str
+
+    # Recipe content
+    ingredients: Optional[List[Dict[str, Any]]] = None
+    instructions: Optional[List[Dict[str, Any]]] = None
+
+    # Uploader info
+    uploader: Optional[UserSummaryAdmin] = None
+
+    # Who hid the recipe (if hidden)
+    hidden_by: Optional[UserSummaryAdmin] = None
