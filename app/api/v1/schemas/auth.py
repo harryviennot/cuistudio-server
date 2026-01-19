@@ -3,7 +3,7 @@ Authentication schemas
 """
 from pydantic import BaseModel, EmailStr, Field
 from datetime import datetime, date
-from typing import Optional
+from typing import Optional, List
 
 
 # ============================================================================
@@ -115,6 +115,29 @@ class UpdateProfileRequest(BaseModel):
 # AUTHENTICATION RESPONSES
 # ============================================================================
 
+class UserWarning(BaseModel):
+    """User warning from moderation system"""
+    id: str
+    reason: str
+    recipe_id: Optional[str] = None
+    recipe_title: Optional[str] = None
+    recipe_image_url: Optional[str] = None
+    created_at: datetime
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "id": "550e8400-e29b-41d4-a716-446655440000",
+                "reason": "Your recipe was reported for inappropriate content.",
+                "recipe_id": "recipe-uuid-here",
+                "recipe_title": "Spicy Thai Curry",
+                "recipe_image_url": "https://example.com/recipe-image.jpg",
+                "created_at": "2024-01-15T10:30:00Z"
+            }
+        }
+    }
+
+
 class UserResponse(BaseModel):
     """User information response"""
     id: str
@@ -124,6 +147,7 @@ class UserResponse(BaseModel):
     user_metadata: Optional[dict] = None
     is_new_user: bool = False
     is_anonymous: bool = False
+    unacknowledged_warnings: List[UserWarning] = []
 
 
 class AuthResponse(BaseModel):

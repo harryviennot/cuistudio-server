@@ -23,7 +23,8 @@ from app.api.v1.schemas.auth import (
     ChangeEmailRequest,
     VerifyEmailChangeRequest,
     AuthResponse,
-    UserResponse
+    UserResponse,
+    UserWarning
 )
 from app.api.v1.schemas.common import MessageResponse
 
@@ -1069,7 +1070,8 @@ async def logout(
                             "username": "johndoe",
                             "profile_completed": True
                         },
-                        "is_new_user": False
+                        "is_new_user": False,
+                        "unacknowledged_warnings": []
                     }
                 }
             }
@@ -1077,7 +1079,10 @@ async def logout(
         401: {"description": "Not authenticated"}
     }
 )
-async def get_me(current_user: dict = Depends(get_current_user)):
+async def get_me(
+    current_user: dict = Depends(get_current_user),
+    admin_client: Client = Depends(get_supabase_admin_client)
+):
     """
     ## Get Current User
 
@@ -1090,8 +1095,35 @@ async def get_me(current_user: dict = Depends(get_current_user)):
     **Response:**
     - Returns user information including metadata
     - Includes `is_new_user` flag indicating if profile completion is needed
+    - Includes `unacknowledged_warnings` array with any pending warnings that require acknowledgment
     """
-    # is_new_user is already checked in get_current_user via database
+    # Fetch unacknowledged warnings for this user, including recipe details
+    warnings = []
+    try:
+        # Join with recipes table to get title and image
+        warnings_result = admin_client.from_("user_warnings")\
+            .select("id, reason, recipe_id, created_at, recipes(title, image_url)")\
+            .eq("user_id", current_user["id"])\
+            .is_("acknowledged_at", "null")\
+            .order("created_at", desc=True)\
+            .execute()
+
+        if warnings_result.data:
+            warnings = [
+                UserWarning(
+                    id=w["id"],
+                    reason=w["reason"],
+                    recipe_id=w.get("recipe_id"),
+                    recipe_title=w.get("recipes", {}).get("title") if w.get("recipes") else None,
+                    recipe_image_url=w.get("recipes", {}).get("image_url") if w.get("recipes") else None,
+                    created_at=w["created_at"]
+                )
+                for w in warnings_result.data
+            ]
+    except Exception as e:
+        # Non-critical - log and continue without warnings
+        logger.warning(f"Failed to fetch user warnings: {e}")
+
     return UserResponse(
         id=current_user["id"],
         email=current_user.get("email"),
@@ -1099,8 +1131,74 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         created_at=current_user["created_at"],
         user_metadata=current_user.get("user_metadata", {}),
         is_new_user=current_user.get("is_new_user", False),
-        is_anonymous=current_user.get("is_anonymous", False)
+        is_anonymous=current_user.get("is_anonymous", False),
+        unacknowledged_warnings=warnings
     )
+
+
+@router.post(
+    "/warnings/{warning_id}/acknowledge",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Acknowledge Warning",
+    description="Mark a warning as acknowledged by the user",
+    responses={
+        200: {
+            "description": "Warning acknowledged successfully",
+            "content": {
+                "application/json": {
+                    "example": {"message": "Warning acknowledged"}
+                }
+            }
+        },
+        401: {"description": "Not authenticated"},
+        404: {"description": "Warning not found or already acknowledged"}
+    }
+)
+async def acknowledge_warning(
+    warning_id: str,
+    current_user: dict = Depends(get_current_user),
+    admin_client: Client = Depends(get_supabase_admin_client)
+):
+    """
+    ## Acknowledge Warning
+
+    Marks a warning as acknowledged by setting the `acknowledged_at` timestamp.
+
+    **Authentication:**
+    - Requires valid JWT access token in Authorization header
+    - Format: `Authorization: Bearer <access_token>`
+
+    **Security:**
+    - Users can only acknowledge their own warnings
+    - Already acknowledged warnings return 404
+    """
+    try:
+        # Update the warning, ensuring it belongs to the current user
+        result = admin_client.from_("user_warnings")\
+            .update({"acknowledged_at": "now()"})\
+            .eq("id", warning_id)\
+            .eq("user_id", current_user["id"])\
+            .is_("acknowledged_at", "null")\
+            .execute()
+
+        if not result.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Warning not found or already acknowledged"
+            )
+
+        logger.info(f"Warning {warning_id} acknowledged by user {current_user['id']}")
+        return MessageResponse(message="Warning acknowledged")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error acknowledging warning {warning_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to acknowledge warning"
+        )
 
 
 @router.post(
