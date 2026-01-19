@@ -15,7 +15,6 @@ import logging
 
 from app.domain.enums import (
     ReportStatus,
-    UserModerationStatus,
     ModerationActionType,
 )
 from app.repositories.content_report_repository import ContentReportRepository

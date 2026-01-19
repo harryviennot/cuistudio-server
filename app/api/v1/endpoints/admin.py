@@ -6,7 +6,7 @@ from supabase import Client
 from typing import Optional
 import logging
 
-from app.core.database import get_supabase_client, get_supabase_admin_client
+from app.core.database import get_supabase_admin_client
 from app.core.security import get_admin_user
 from app.services.moderation_service import ModerationService
 from app.api.v1.schemas.admin import (
@@ -29,7 +29,6 @@ from app.api.v1.schemas.admin import (
     ExtractionFeedbackAdmin,
     ReportQueueResponse,
     FeedbackQueueResponse,
-    UserModerationDetailAdmin,
     UserModerationDetailEnhancedAdmin,
     UserListItemAdmin,
     UserListResponse,

@@ -2,7 +2,7 @@
 User moderation repository for database operations
 """
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime
 from supabase import Client
 import logging
 

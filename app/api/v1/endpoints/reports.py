@@ -3,7 +3,7 @@ Report endpoints for content reports and extraction feedback
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from supabase import Client
-from typing import List, Optional
+from typing import Optional
 import logging
 
 from app.core.database import get_supabase_client, get_supabase_user_client
@@ -20,7 +20,6 @@ from app.api.v1.schemas.report import (
     UserFeedbackResponse,
     ReportReasonOption,
 )
-from app.api.v1.schemas.common import MessageResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/reports", tags=["Reports"])

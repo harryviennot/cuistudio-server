@@ -5,11 +5,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
-from app.domain.enums import (
-    ReportStatus,
-    UserModerationStatus,
-    ModerationActionType,
-)
+from app.domain.enums import ReportStatus
 
 
 # =============================================================================

@@ -8,7 +8,6 @@ from datetime import datetime
 from app.domain.enums import (
     ContentReportReason,
     ExtractionFeedbackCategory,
-    ReportStatus,
 )
 
 

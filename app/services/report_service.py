@@ -16,7 +16,6 @@ import logging
 from app.domain.enums import (
     ContentReportReason,
     ExtractionFeedbackCategory,
-    ReportStatus,
 )
 from app.repositories.content_report_repository import ContentReportRepository
 from app.repositories.extraction_feedback_repository import ExtractionFeedbackRepository
@@ -151,7 +150,7 @@ class ReportService:
                 recipe_id, user_id, category
             )
             if existing:
-                return None, f"You have already submitted feedback for this category on this recipe"
+                return None, "You have already submitted feedback for this category on this recipe"
 
             # Create the feedback
             feedback = await self.extraction_feedback_repo.create_feedback(

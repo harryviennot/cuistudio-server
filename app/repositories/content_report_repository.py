@@ -262,7 +262,7 @@ class ContentReportRepository(BaseRepository):
         """
         try:
             # Use RPC to call the rate limit check function
-            response = self.supabase.rpc(
+            self.supabase.rpc(
                 'check_report_rate_limit',
                 {'p_user_id': user_id}
             ).execute()
