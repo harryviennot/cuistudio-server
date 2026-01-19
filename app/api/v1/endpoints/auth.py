@@ -1097,11 +1097,12 @@ async def get_me(
     - Includes `is_new_user` flag indicating if profile completion is needed
     - Includes `unacknowledged_warnings` array with any pending warnings that require acknowledgment
     """
-    # Fetch unacknowledged warnings for this user
+    # Fetch unacknowledged warnings for this user, including recipe details
     warnings = []
     try:
+        # Join with recipes table to get title and image
         warnings_result = admin_client.from_("user_warnings")\
-            .select("id, reason, recipe_id, created_at")\
+            .select("id, reason, recipe_id, created_at, recipes(title, image_url)")\
             .eq("user_id", current_user["id"])\
             .is_("acknowledged_at", "null")\
             .order("created_at", desc=True)\
@@ -1113,6 +1114,8 @@ async def get_me(
                     id=w["id"],
                     reason=w["reason"],
                     recipe_id=w.get("recipe_id"),
+                    recipe_title=w.get("recipes", {}).get("title") if w.get("recipes") else None,
+                    recipe_image_url=w.get("recipes", {}).get("image_url") if w.get("recipes") else None,
                     created_at=w["created_at"]
                 )
                 for w in warnings_result.data

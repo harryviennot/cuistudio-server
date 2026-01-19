@@ -120,6 +120,8 @@ class UserWarning(BaseModel):
     id: str
     reason: str
     recipe_id: Optional[str] = None
+    recipe_title: Optional[str] = None
+    recipe_image_url: Optional[str] = None
     created_at: datetime
 
     model_config = {
@@ -128,6 +130,8 @@ class UserWarning(BaseModel):
                 "id": "550e8400-e29b-41d4-a716-446655440000",
                 "reason": "Your recipe was reported for inappropriate content.",
                 "recipe_id": "recipe-uuid-here",
+                "recipe_title": "Spicy Thai Curry",
+                "recipe_image_url": "https://example.com/recipe-image.jpg",
                 "created_at": "2024-01-15T10:30:00Z"
             }
         }
