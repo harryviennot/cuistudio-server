@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     DEBUG: bool = True
 
     # CORS
-    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:8081"
+    CORS_ORIGINS: Optional[str] = None
 
     # OAuth & Auth Redirects
     OAUTH_REDIRECT_URL: str = "http://localhost:3000/auth/callback"
