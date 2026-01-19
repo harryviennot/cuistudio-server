@@ -126,3 +126,41 @@ def is_anonymous_user(user: dict) -> bool:
         True if user is anonymous, False otherwise
     """
     return user.get("is_anonymous", False)
+
+
+async def get_admin_user(
+    current_user: dict = Depends(get_authenticated_user),
+    supabase: Client = Depends(get_supabase_client)
+) -> dict:
+    """
+    Require an admin user.
+    Used for moderation/admin endpoints.
+
+    Raises:
+        HTTPException: If user is not an admin
+    """
+    try:
+        # Check if user has admin flag in database
+        user_result = supabase.from_("users")\
+            .select("id, is_admin")\
+            .eq("id", current_user["id"])\
+            .single()\
+            .execute()
+
+        if not user_result.data or not user_result.data.get("is_admin", False):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin access required",
+            )
+
+        current_user["is_admin"] = True
+        return current_user
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Admin check error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
