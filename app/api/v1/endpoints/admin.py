@@ -21,6 +21,7 @@ from app.api.v1.schemas.admin import (
     BanUserRequest,
     UnsuspendUserRequest,
     UnbanUserRequest,
+    DeleteUserRequest,
     # Response schemas
     AdminMeResponse,
     ContentReportAdmin,
@@ -29,6 +30,9 @@ from app.api.v1.schemas.admin import (
     ReportQueueResponse,
     FeedbackQueueResponse,
     UserModerationDetailAdmin,
+    UserModerationDetailEnhancedAdmin,
+    UserListItemAdmin,
+    UserListResponse,
     ModerationStatisticsResponse,
 )
 from app.api.v1.schemas.common import MessageResponse
@@ -60,6 +64,54 @@ async def get_admin_me(
         email=current_user.get("email"),
         is_admin=True
     )
+
+
+# =============================================================================
+# USER LIST & MANAGEMENT
+# =============================================================================
+
+
+@router.get(
+    "/users",
+    response_model=UserListResponse,
+    summary="Get user list",
+    description="Get paginated list of users with moderation and subscription info"
+)
+async def get_users(
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by moderation status"),
+    is_premium: Optional[bool] = Query(None, description="Filter by premium status"),
+    search: Optional[str] = Query(None, description="Search by name or email"),
+    sort_by: str = Query("created_at", description="Sort field: created_at, name, last_sign_in_at"),
+    sort_order: str = Query("desc", description="Sort order: asc or desc"),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_admin_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """Get paginated user list with moderation and subscription info"""
+    try:
+        service = ModerationService(supabase)
+        result = await service.get_users_list(
+            status=status_filter,
+            is_premium=is_premium,
+            search=search,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=limit,
+            offset=offset
+        )
+
+        return UserListResponse(
+            users=[UserListItemAdmin(**u) for u in result["users"]],
+            total=result["total"]
+        )
+
+    except Exception as e:
+        logger.error(f"Error fetching user list: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch users"
+        )
 
 
 # =============================================================================
@@ -429,27 +481,66 @@ async def unhide_recipe(
 
 @router.get(
     "/users/{user_id}",
-    response_model=UserModerationDetailAdmin,
+    response_model=UserModerationDetailEnhancedAdmin,
     summary="Get user moderation details",
-    description="Get complete moderation details for a user"
+    description="Get complete moderation details for a user including feedback and subscription"
 )
 async def get_user_moderation_details(
     user_id: str,
     current_user: dict = Depends(get_admin_user),
     supabase: Client = Depends(get_supabase_admin_client)
 ):
-    """Get user moderation details"""
+    """Get enhanced user moderation details including feedback and subscription"""
     try:
         service = ModerationService(supabase)
-        details = await service.get_user_moderation_details(user_id)
+        details = await service.get_user_moderation_details_enhanced(user_id)
 
-        return UserModerationDetailAdmin(**details)
+        return UserModerationDetailEnhancedAdmin(**details)
 
     except Exception as e:
         logger.error(f"Error fetching user moderation details: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch user details"
+        )
+
+
+@router.delete(
+    "/users/{user_id}",
+    response_model=MessageResponse,
+    summary="Delete user",
+    description="Permanently delete a user account"
+)
+async def delete_user(
+    user_id: str,
+    request: DeleteUserRequest,
+    current_user: dict = Depends(get_admin_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """Delete a user account. Transfers video recipes to system account, deletes personal recipes."""
+    try:
+        service = ModerationService(supabase)
+        result, error = await service.delete_user(
+            moderator_id=current_user["id"],
+            user_id=user_id,
+            reason=request.reason
+        )
+
+        if error:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error
+            )
+
+        return MessageResponse(message="User deleted successfully")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting user: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete user"
         )
 
 

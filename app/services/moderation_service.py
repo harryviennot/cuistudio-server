@@ -509,7 +509,7 @@ class ModerationService:
         reason: str
     ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         """
-        Temporarily suspend a user.
+        Temporarily suspend a user using Supabase's native ban.
 
         Args:
             moderator_id: ID of the moderator
@@ -518,22 +518,18 @@ class ModerationService:
             reason: Reason for suspension
 
         Returns:
-            Tuple of (moderation record, error message if any)
+            Tuple of (result dict, error message if any)
         """
         try:
-            suspended_until = datetime.now(timezone.utc) + timedelta(days=duration_days)
-
-            # Update user moderation status
-            moderation = await self.user_moderation_repo.update_status(
-                user_id=user_id,
-                status=UserModerationStatus.SUSPENDED.value,
-                suspended_until=suspended_until
+            # Use Supabase's native ban with duration
+            # Convert days to hours for Supabase (supports formats like "24h", "168h")
+            duration_hours = duration_days * 24
+            self.supabase.auth.admin.update_user_by_id(
+                user_id,
+                {"ban_duration": f"{duration_hours}h"}
             )
 
-            if not moderation:
-                return None, "Failed to suspend user"
-
-            # Log the action
+            # Log the action for audit trail
             await self.moderation_action_repo.log_action(
                 moderator_id=moderator_id,
                 action_type=ModerationActionType.SUSPEND_USER.value,
@@ -543,7 +539,7 @@ class ModerationService:
             )
 
             logger.info(f"User {user_id} suspended for {duration_days} days by moderator {moderator_id}")
-            return moderation, None
+            return {"user_id": user_id, "suspended_days": duration_days}, None
 
         except Exception as e:
             logger.error(f"Error suspending user: {str(e)}")
@@ -556,7 +552,7 @@ class ModerationService:
         reason: str
     ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         """
-        Remove suspension from a user.
+        Remove suspension from a user using Supabase's native unban.
 
         Args:
             moderator_id: ID of the moderator
@@ -564,17 +560,14 @@ class ModerationService:
             reason: Reason for unsuspension
 
         Returns:
-            Tuple of (moderation record, error message if any)
+            Tuple of (result dict, error message if any)
         """
         try:
-            # Update user moderation status
-            moderation = await self.user_moderation_repo.update_status(
-                user_id=user_id,
-                status=UserModerationStatus.WARNED.value  # Return to warned status
+            # Remove Supabase ban
+            self.supabase.auth.admin.update_user_by_id(
+                user_id,
+                {"ban_duration": "none"}
             )
-
-            if not moderation:
-                return None, "Failed to unsuspend user"
 
             # Log the action
             await self.moderation_action_repo.log_action(
@@ -585,7 +578,7 @@ class ModerationService:
             )
 
             logger.info(f"User {user_id} unsuspended by moderator {moderator_id}")
-            return moderation, None
+            return {"user_id": user_id, "unsuspended": True}, None
 
         except Exception as e:
             logger.error(f"Error unsuspending user: {str(e)}")
@@ -598,7 +591,7 @@ class ModerationService:
         reason: str
     ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         """
-        Permanently ban a user.
+        Permanently ban a user using Supabase's native ban.
 
         Args:
             moderator_id: ID of the moderator
@@ -606,18 +599,14 @@ class ModerationService:
             reason: Reason for ban
 
         Returns:
-            Tuple of (moderation record, error message if any)
+            Tuple of (result dict, error message if any)
         """
         try:
-            # Update user moderation status
-            moderation = await self.user_moderation_repo.update_status(
-                user_id=user_id,
-                status=UserModerationStatus.BANNED.value,
-                ban_reason=reason
+            # Use Supabase's native ban with ~100 year duration (permanent)
+            self.supabase.auth.admin.update_user_by_id(
+                user_id,
+                {"ban_duration": "876000h"}  # ~100 years
             )
-
-            if not moderation:
-                return None, "Failed to ban user"
 
             # Hide all user's public recipes
             self.supabase.table("recipes")\
@@ -639,7 +628,7 @@ class ModerationService:
             )
 
             logger.info(f"User {user_id} banned by moderator {moderator_id}")
-            return moderation, None
+            return {"user_id": user_id, "banned": True}, None
 
         except Exception as e:
             logger.error(f"Error banning user: {str(e)}")
@@ -652,7 +641,7 @@ class ModerationService:
         reason: str
     ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         """
-        Remove ban from a user.
+        Remove ban from a user using Supabase's native unban.
 
         Args:
             moderator_id: ID of the moderator
@@ -660,18 +649,14 @@ class ModerationService:
             reason: Reason for unban
 
         Returns:
-            Tuple of (moderation record, error message if any)
+            Tuple of (result dict, error message if any)
         """
         try:
-            # Update user moderation status
-            moderation = await self.user_moderation_repo.update_status(
-                user_id=user_id,
-                status=UserModerationStatus.WARNED.value,
-                ban_reason=None
+            # Remove Supabase ban
+            self.supabase.auth.admin.update_user_by_id(
+                user_id,
+                {"ban_duration": "none"}
             )
-
-            if not moderation:
-                return None, "Failed to unban user"
 
             # Log the action
             await self.moderation_action_repo.log_action(
@@ -682,7 +667,7 @@ class ModerationService:
             )
 
             logger.info(f"User {user_id} unbanned by moderator {moderator_id}")
-            return moderation, None
+            return {"user_id": user_id, "unbanned": True}, None
 
         except Exception as e:
             logger.error(f"Error unbanning user: {str(e)}")
@@ -756,3 +741,305 @@ class ModerationService:
         except Exception as e:
             logger.error(f"Error getting moderation statistics: {str(e)}")
             raise
+
+    # =========================================================================
+    # USER LIST & ENHANCED DETAILS
+    # =========================================================================
+
+    async def get_users_list(
+        self,
+        status: Optional[str] = None,
+        is_premium: Optional[bool] = None,
+        search: Optional[str] = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+        limit: int = 50,
+        offset: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Get paginated list of users with moderation and subscription info.
+
+        Args:
+            status: Filter by moderation status (good_standing, warned, suspended, banned)
+            is_premium: Filter by premium subscription status
+            search: Search by name or email (name only - email search requires auth admin)
+            sort_by: Field to sort by (created_at, name)
+            sort_order: asc or desc
+            limit: Max users to return
+            offset: Pagination offset
+
+        Returns:
+            Dictionary with users list and total count
+        """
+        try:
+            # Build query for public.users table
+            # Note: email and last_sign_in_at are in auth.users, not public.users
+            query = self.supabase.table("users")\
+                .select(
+                    "id, name, avatar_url, created_at",
+                    count="exact"
+                )
+
+            # Apply search filter (name only - email is in auth.users)
+            if search:
+                query = query.ilike("name", f"%{search}%")
+
+            # Apply sorting (only fields in public.users)
+            if sort_by in ["created_at", "name"]:
+                query = query.order(sort_by, desc=(sort_order == "desc"))
+            else:
+                query = query.order("created_at", desc=(sort_order == "desc"))
+
+            # Apply pagination
+            query = query.limit(limit).offset(offset)
+
+            response = query.execute()
+
+            # Get moderation and subscription data for these users
+            user_ids = [u["id"] for u in (response.data or [])]
+
+            if not user_ids:
+                return {"users": [], "total": 0}
+
+            # Get auth user data (email, last_sign_in_at) via admin API
+            auth_by_user: Dict[str, dict] = {}
+            for uid in user_ids:
+                try:
+                    auth_user = self.supabase.auth.admin.get_user_by_id(uid)
+                    if auth_user and auth_user.user:
+                        auth_by_user[uid] = {
+                            "email": auth_user.user.email,
+                            "last_sign_in_at": auth_user.user.last_sign_in_at
+                        }
+                except Exception as auth_err:
+                    logger.warning(f"Could not fetch auth data for user {uid}: {auth_err}")
+
+            # Get moderation records
+            mod_response = self.supabase.table("user_moderation")\
+                .select("*")\
+                .in_("user_id", user_ids)\
+                .execute()
+            mod_by_user = {m["user_id"]: m for m in (mod_response.data or [])}
+
+            # Get subscription records
+            sub_response = self.supabase.table("user_subscriptions")\
+                .select("user_id, is_active, expires_at, is_trial")\
+                .in_("user_id", user_ids)\
+                .execute()
+            sub_by_user = {s["user_id"]: s for s in (sub_response.data or [])}
+
+            # Get reports submitted by each user
+            reports_response = self.supabase.table("content_reports")\
+                .select("reporter_user_id")\
+                .in_("reporter_user_id", user_ids)\
+                .execute()
+            reports_by_user: Dict[str, int] = {}
+            for r in (reports_response.data or []):
+                uid = r["reporter_user_id"]
+                reports_by_user[uid] = reports_by_user.get(uid, 0) + 1
+
+            # Transform data
+            users = []
+            for user in response.data or []:
+                user_id = user["id"]
+                auth_data = auth_by_user.get(user_id, {})
+                moderation = mod_by_user.get(user_id, {})
+                subscription = sub_by_user.get(user_id, {})
+
+                user_item = {
+                    "id": user_id,
+                    "name": user.get("name"),
+                    "email": auth_data.get("email"),
+                    "avatar_url": user.get("avatar_url"),
+                    "created_at": user["created_at"],
+                    "last_sign_in_at": auth_data.get("last_sign_in_at"),
+                    "moderation_status": moderation.get("status", "good_standing"),
+                    "warning_count": moderation.get("warning_count", 0),
+                    "report_count": moderation.get("report_count", 0),
+                    "reports_submitted": reports_by_user.get(user_id, 0),
+                    "false_report_count": moderation.get("false_report_count", 0),
+                    "reporter_reliability_score": moderation.get("reporter_reliability_score", 100) / 100.0,
+                    "is_premium": subscription.get("is_active", False),
+                    "subscription_expires_at": subscription.get("expires_at"),
+                    "is_trial": subscription.get("is_trial", False),
+                }
+
+                # Apply status filter (after fetching since we need to join)
+                if status and user_item["moderation_status"] != status:
+                    continue
+
+                # Apply premium filter
+                if is_premium is not None and user_item["is_premium"] != is_premium:
+                    continue
+
+                users.append(user_item)
+
+            return {
+                "users": users,
+                "total": response.count or len(users)
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting users list: {str(e)}")
+            raise
+
+    async def get_user_moderation_details_enhanced(
+        self,
+        user_id: str
+    ) -> Dict[str, Any]:
+        """
+        Get complete moderation details for a user including feedback and subscription.
+
+        Args:
+            user_id: ID of the user
+
+        Returns:
+            Dictionary with moderation status, warnings, actions, feedback, and subscription
+        """
+        try:
+            # Get base moderation details
+            base_details = await self.get_user_moderation_details(user_id)
+
+            # Get user's extraction feedback
+            feedback_response = self.supabase.table("extraction_feedback")\
+                .select("*, recipes(id, title, image_url)")\
+                .eq("user_id", user_id)\
+                .order("created_at", desc=True)\
+                .limit(20)\
+                .execute()
+
+            # Get subscription info
+            sub_response = self.supabase.table("user_subscriptions")\
+                .select("is_active, product_id, expires_at, is_trial")\
+                .eq("user_id", user_id)\
+                .execute()
+            subscription = sub_response.data[0] if sub_response.data else {}
+
+            # Get user created_at from public.users
+            user_response = self.supabase.table("users")\
+                .select("created_at")\
+                .eq("id", user_id)\
+                .single()\
+                .execute()
+            user_data = user_response.data or {}
+
+            # Get email and last_sign_in_at from auth.users via admin API
+            auth_data = {}
+            try:
+                auth_user = self.supabase.auth.admin.get_user_by_id(user_id)
+                if auth_user and auth_user.user:
+                    auth_data = {
+                        "email": auth_user.user.email,
+                        "last_sign_in_at": auth_user.user.last_sign_in_at
+                    }
+            except Exception as auth_err:
+                logger.warning(f"Could not fetch auth data for user {user_id}: {auth_err}")
+
+            # Count reports submitted by this user
+            reports_count_response = self.supabase.table("content_reports")\
+                .select("id", count="exact")\
+                .eq("reporter_user_id", user_id)\
+                .execute()
+
+            return {
+                **base_details,
+                "email": auth_data.get("email"),
+                "created_at": user_data.get("created_at"),
+                "last_sign_in_at": auth_data.get("last_sign_in_at"),
+                "feedback": feedback_response.data or [],
+                "reports_submitted": reports_count_response.count or 0,
+                "is_premium": subscription.get("is_active", False),
+                "subscription_product_id": subscription.get("product_id"),
+                "subscription_expires_at": subscription.get("expires_at"),
+                "is_trial": subscription.get("is_trial", False),
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting enhanced user moderation details: {str(e)}")
+            raise
+
+    async def delete_user(
+        self,
+        moderator_id: str,
+        user_id: str,
+        reason: str
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """
+        Delete a user account (admin action).
+
+        Transfers video-extracted recipes to system account,
+        deletes personal recipes, anonymizes contributor records.
+
+        Args:
+            moderator_id: ID of the moderator performing the action
+            user_id: ID of the user to delete
+            reason: Reason for deletion
+
+        Returns:
+            Tuple of (result dict, error message if any)
+        """
+        try:
+            # System account ID for transferring video recipes
+            SYSTEM_ACCOUNT_ID = "00000000-0000-0000-0000-000000000000"
+
+            logger.info(f"Admin {moderator_id} starting account deletion for user {user_id}")
+
+            # Step 1: Find video-extracted recipes owned by this user
+            video_recipes_result = self.supabase.table("recipes")\
+                .select("id")\
+                .eq("created_by", user_id)\
+                .eq("source_type", "video")\
+                .execute()
+
+            video_recipe_ids = []
+            if video_recipes_result.data:
+                video_recipe_ids = [r["id"] for r in video_recipes_result.data]
+
+            # Step 2: Transfer video-extracted recipes to system account
+            if video_recipe_ids:
+                system_account = self.supabase.table("users")\
+                    .select("id")\
+                    .eq("id", SYSTEM_ACCOUNT_ID)\
+                    .execute()
+
+                if system_account.data:
+                    self.supabase.table("recipes")\
+                        .update({"created_by": SYSTEM_ACCOUNT_ID})\
+                        .in_("id", video_recipe_ids)\
+                        .execute()
+                    logger.info(f"Transferred {len(video_recipe_ids)} video-extracted recipes to system account")
+
+            # Step 3: Anonymize contributor records
+            self.supabase.table("recipe_contributors")\
+                .update({"display_name": "[Deleted User]", "user_id": None})\
+                .eq("user_id", user_id)\
+                .execute()
+
+            # Step 4: Clean up storage
+            for bucket_name in ["recipe-images", "cooking-events"]:
+                try:
+                    files = self.supabase.storage.from_(bucket_name).list(path=user_id)
+                    if files:
+                        file_paths = [f"{user_id}/{f['name']}" for f in files]
+                        self.supabase.storage.from_(bucket_name).remove(file_paths)
+                        logger.info(f"Deleted {len(file_paths)} files from {bucket_name}/{user_id}")
+                except Exception as storage_error:
+                    logger.warning(f"Storage cleanup error for {bucket_name}/{user_id}: {storage_error}")
+
+            # Step 5: Log the moderation action before deleting user
+            await self.moderation_action_repo.log_action(
+                moderator_id=moderator_id,
+                action_type="delete_user",
+                reason=reason,
+                target_user_id=user_id
+            )
+
+            # Step 6: Delete auth user (CASCADE handles remaining data)
+            self.supabase.auth.admin.delete_user(user_id)
+
+            logger.info(f"Account deletion completed for user {user_id} by admin {moderator_id}")
+            return {"user_id": user_id, "deleted": True}, None
+
+        except Exception as e:
+            logger.error(f"Error deleting user {user_id}: {str(e)}")
+            return None, "An error occurred while deleting the user"

@@ -302,3 +302,80 @@ class AdminMeResponse(BaseModel):
     user_id: str
     email: Optional[str] = None
     is_admin: bool = True
+
+
+# =============================================================================
+# USER LIST SCHEMAS
+# =============================================================================
+
+
+class UserListItemAdmin(BaseModel):
+    """User list item for admin view"""
+    id: str
+    name: Optional[str] = None
+    email: Optional[str] = None
+    avatar_url: Optional[str] = None
+    created_at: datetime
+    last_sign_in_at: Optional[datetime] = None
+
+    # Moderation status
+    moderation_status: str = "good_standing"  # good_standing, warned, suspended, banned
+    warning_count: int = 0
+    report_count: int = 0  # reports AGAINST user
+
+    # Reporter stats
+    reports_submitted: int = 0  # reports BY user
+    false_report_count: int = 0
+    reporter_reliability_score: float = 1.0
+
+    # Subscription info
+    is_premium: bool = False
+    subscription_expires_at: Optional[datetime] = None
+    is_trial: bool = False
+
+
+class UserListResponse(BaseModel):
+    """Response for user list endpoint"""
+    users: List[UserListItemAdmin]
+    total: int
+
+
+class UserFeedbackAdmin(BaseModel):
+    """User's extraction feedback for admin view"""
+    id: str
+    recipe_id: str
+    category: str
+    description: Optional[str] = None
+    status: str
+    created_at: datetime
+    resolved_at: Optional[datetime] = None
+    was_helpful: Optional[bool] = None
+
+    # Nested objects
+    recipes: Optional[RecipeSummaryAdmin] = None
+
+
+class UserModerationDetailEnhancedAdmin(BaseModel):
+    """Complete user details including feedback and subscription"""
+    user: Optional[UserSummaryAdmin] = None
+    email: Optional[str] = None
+    created_at: Optional[datetime] = None
+    last_sign_in_at: Optional[datetime] = None
+    moderation: UserModerationAdmin
+    warnings: List[UserWarningAdmin]
+    actions: List[ModerationActionAdmin]
+    feedback: List[UserFeedbackAdmin] = []
+
+    # Reporter stats
+    reports_submitted: int = 0
+
+    # Subscription info
+    is_premium: bool = False
+    subscription_product_id: Optional[str] = None
+    subscription_expires_at: Optional[datetime] = None
+    is_trial: bool = False
+
+
+class DeleteUserRequest(BaseModel):
+    """Request to delete a user"""
+    reason: str = Field(..., max_length=500, description="Reason for deletion")
