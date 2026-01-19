@@ -214,6 +214,7 @@ class RecipeRepository(BaseRepository):
                 .select("*")\
                 .eq("is_public", True)\
                 .eq("is_draft", False)\
+                .eq("is_hidden", False)\
                 .order("created_at", desc=True)
 
             # Apply additional filters
@@ -527,6 +528,7 @@ class RecipeRepository(BaseRepository):
                 .select("*")\
                 .eq("original_recipe_id", recipe_id)\
                 .eq("is_public", True)\
+                .eq("is_hidden", False)\
                 .order("created_at", desc=True)\
                 .execute()
 
@@ -818,6 +820,7 @@ class RecipeRepository(BaseRepository):
                 .select("*")\
                 .eq("is_public", True)\
                 .eq("is_draft", False)\
+                .eq("is_hidden", False)\
                 .gte("rating_count", min_rating_count)\
                 .order("average_rating", desc=True)\
                 .range(offset, offset + limit - 1)\
@@ -848,6 +851,7 @@ class RecipeRepository(BaseRepository):
                 .select("*")\
                 .eq("is_public", True)\
                 .eq("is_draft", False)\
+                .eq("is_hidden", False)\
                 .order("created_at", desc=True)\
                 .range(offset, offset + limit - 1)\
                 .execute()

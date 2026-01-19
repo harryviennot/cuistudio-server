@@ -375,10 +375,14 @@ async def get_recipe(
         # Check access permissions
         user_id = current_user["id"] if current_user else None
 
-        if not recipe["is_public"]:
+        # Treat hidden recipes as private (moderated content)
+        # Owner can still access their hidden recipe
+        is_private_or_hidden = not recipe["is_public"] or recipe.get("is_hidden", False)
+
+        if is_private_or_hidden:
             if not user_id or recipe["created_by"] != user_id:
-                # Check if shared with user
-                if user_id:
+                # Check if shared with user (only for private, not hidden)
+                if user_id and not recipe.get("is_hidden", False):
                     share_check = await supabase.table("recipe_shares")\
                         .select("id")\
                         .eq("recipe_id", recipe_id)\
@@ -390,6 +394,12 @@ async def get_recipe(
                             status_code=status.HTTP_403_FORBIDDEN,
                             detail="You don't have access to this recipe"
                         )
+                elif recipe.get("is_hidden", False):
+                    # Hidden recipes are not accessible via sharing
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="This recipe is not available"
+                    )
                 else:
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
