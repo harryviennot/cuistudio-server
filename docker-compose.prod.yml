@@ -47,6 +47,7 @@ services:
       - UVICORN_WORKERS=2
       - REVENUECAT_API_KEY=${REVENUECAT_API_KEY}
       - REVENUECAT_PROJECT_ID=${REVENUECAT_PROJECT_ID}
+      - CORS_ORIGINS=${CORS_ORIGINS}
     deploy:
       resources:
         limits:
