@@ -35,6 +35,9 @@ from app.api.v1.schemas.admin import (
     ModerationStatisticsResponse,
     HiddenRecipeAdmin,
     HiddenRecipesResponse,
+    AdminRecipeListItem,
+    AdminRecipesListResponse,
+    AdminRecipeDetailResponse,
 )
 from app.api.v1.schemas.common import MessageResponse
 
@@ -398,6 +401,45 @@ async def resolve_feedback(
 
 
 @router.get(
+    "/recipes",
+    response_model=AdminRecipesListResponse,
+    summary="Get recipes list",
+    description="Get paginated list of all recipes with uploader info"
+)
+async def get_admin_recipes(
+    user_id: Optional[str] = Query(None, description="Filter by uploader user ID"),
+    search: Optional[str] = Query(None, description="Search in title"),
+    is_hidden: Optional[bool] = Query(None, description="Filter by hidden status"),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_admin_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """Get paginated list of all recipes with uploader info for admin panel"""
+    try:
+        service = ModerationService(supabase)
+        result = await service.get_admin_recipes_list(
+            user_id=user_id,
+            search=search,
+            is_hidden=is_hidden,
+            limit=limit,
+            offset=offset
+        )
+
+        return AdminRecipesListResponse(
+            recipes=[AdminRecipeListItem(**r) for r in result["recipes"]],
+            total=result["total"]
+        )
+
+    except Exception as e:
+        logger.error(f"Error fetching admin recipes list: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch recipes"
+        )
+
+
+@router.get(
     "/recipes/hidden",
     response_model=HiddenRecipesResponse,
     summary="Get hidden recipes",
@@ -427,6 +469,40 @@ async def get_hidden_recipes(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch hidden recipes"
+        )
+
+
+@router.get(
+    "/recipes/{recipe_id}",
+    response_model=AdminRecipeDetailResponse,
+    summary="Get recipe details",
+    description="Get full recipe details for admin view including moderation info"
+)
+async def get_admin_recipe(
+    recipe_id: str,
+    current_user: dict = Depends(get_admin_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """Get full recipe details for admin moderation view"""
+    try:
+        service = ModerationService(supabase)
+        result = await service.get_admin_recipe_detail(recipe_id)
+
+        if not result:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Recipe not found"
+            )
+
+        return AdminRecipeDetailResponse(**result)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching admin recipe detail: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch recipe"
         )
 
 
