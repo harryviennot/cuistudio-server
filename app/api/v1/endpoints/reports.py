@@ -3,7 +3,6 @@ Report endpoints for content reports and extraction feedback
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from supabase import Client
-from typing import Optional
 import logging
 
 from app.core.database import get_supabase_client, get_supabase_user_client
