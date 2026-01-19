@@ -529,6 +529,18 @@ class ModerationService:
                 {"ban_duration": f"{duration_hours}h"}
             )
 
+            # Update user_moderation status
+            suspended_until = datetime.now(timezone.utc) + timedelta(days=duration_days)
+            await self.user_moderation_repo.get_or_create(user_id)
+            self.supabase.table("user_moderation")\
+                .update({
+                    "status": "suspended",
+                    "suspended_until": suspended_until.isoformat(),
+                    "ban_reason": reason
+                })\
+                .eq("user_id", user_id)\
+                .execute()
+
             # Log the action for audit trail
             await self.moderation_action_repo.log_action(
                 moderator_id=moderator_id,
@@ -569,6 +581,18 @@ class ModerationService:
                 {"ban_duration": "none"}
             )
 
+            # Update user_moderation status back to good_standing (or warned if they have warnings)
+            moderation = await self.user_moderation_repo.get_or_create(user_id)
+            new_status = "warned" if moderation.get("warning_count", 0) > 0 else "good_standing"
+            self.supabase.table("user_moderation")\
+                .update({
+                    "status": new_status,
+                    "suspended_until": None,
+                    "ban_reason": None
+                })\
+                .eq("user_id", user_id)\
+                .execute()
+
             # Log the action
             await self.moderation_action_repo.log_action(
                 moderator_id=moderator_id,
@@ -607,6 +631,17 @@ class ModerationService:
                 user_id,
                 {"ban_duration": "876000h"}  # ~100 years
             )
+
+            # Update user_moderation status to banned
+            await self.user_moderation_repo.get_or_create(user_id)
+            self.supabase.table("user_moderation")\
+                .update({
+                    "status": "banned",
+                    "suspended_until": None,
+                    "ban_reason": reason
+                })\
+                .eq("user_id", user_id)\
+                .execute()
 
             # Hide all user's public recipes
             self.supabase.table("recipes")\
@@ -657,6 +692,18 @@ class ModerationService:
                 user_id,
                 {"ban_duration": "none"}
             )
+
+            # Update user_moderation status back to good_standing (or warned if they have warnings)
+            moderation = await self.user_moderation_repo.get_or_create(user_id)
+            new_status = "warned" if moderation.get("warning_count", 0) > 0 else "good_standing"
+            self.supabase.table("user_moderation")\
+                .update({
+                    "status": new_status,
+                    "suspended_until": None,
+                    "ban_reason": None
+                })\
+                .eq("user_id", user_id)\
+                .execute()
 
             # Log the action
             await self.moderation_action_repo.log_action(
@@ -721,21 +768,73 @@ class ModerationService:
     async def get_statistics(self) -> Dict[str, Any]:
         """
         Get overall moderation statistics.
+        Uses optimized get_admin_dashboard_stats Supabase function.
 
         Returns:
             Dictionary with report, feedback, and user statistics
         """
         try:
-            report_stats = await self.content_report_repo.get_report_statistics()
-            feedback_stats = await self.extraction_feedback_repo.get_feedback_statistics()
-            user_stats = await self.user_moderation_repo.get_moderation_statistics()
-            action_stats = await self.moderation_action_repo.get_action_statistics(days=30)
+            # Call the optimized Supabase function
+            response = self.supabase.rpc("get_admin_dashboard_stats", {}).execute()
+
+            if not response.data:
+                # Fallback to old method if function doesn't exist yet
+                report_stats = await self.content_report_repo.get_report_statistics()
+                feedback_stats = await self.extraction_feedback_repo.get_feedback_statistics()
+                user_stats = await self.user_moderation_repo.get_moderation_statistics()
+                action_stats = await self.moderation_action_repo.get_action_statistics(days=30)
+
+                return {
+                    "reports": report_stats,
+                    "feedback": feedback_stats,
+                    "users": user_stats,
+                    "actions": action_stats
+                }
+
+            stats = response.data[0]
+
+            # Calculate good_standing count (total - warned - suspended - banned)
+            good_standing = (
+                stats["users_total"]
+                - stats["users_warned"]
+                - stats["users_suspended"]
+                - stats["users_banned"]
+            )
+
+            # Build by_status dict for reports
+            reports_by_status = {
+                "pending": stats["reports_pending"],
+                "in_review": stats["reports_in_review"],
+                "resolved": stats["reports_resolved_week"]  # Use week as approximation
+            }
+
+            # Build by_status dict for feedback
+            feedback_by_status = {
+                "pending": stats["feedback_pending"],
+                "in_review": stats["feedback_in_review"],
+                "resolved": stats["feedback_resolved_week"]  # Use week as approximation
+            }
 
             return {
-                "reports": report_stats,
-                "feedback": feedback_stats,
-                "users": user_stats,
-                "actions": action_stats
+                "reports": {
+                    "by_status": reports_by_status,
+                    "pending_by_reason": stats["reports_by_reason"] or {}
+                },
+                "feedback": {
+                    "by_status": feedback_by_status,
+                    "pending_by_category": stats["feedback_by_category"] or {}
+                },
+                "users": {
+                    "good_standing": good_standing,
+                    "warned": stats["users_warned"],
+                    "suspended": stats["users_suspended"],
+                    "banned": stats["users_banned"]
+                },
+                "actions": {
+                    "by_type": {},  # Not tracked in optimized function
+                    "total": stats["actions_week"],
+                    "period_days": 7
+                }
             }
 
         except Exception as e:
@@ -758,12 +857,13 @@ class ModerationService:
     ) -> Dict[str, Any]:
         """
         Get paginated list of users with moderation and subscription info.
+        Uses the optimized get_admin_users_list Supabase function.
 
         Args:
             status: Filter by moderation status (good_standing, warned, suspended, banned)
             is_premium: Filter by premium subscription status
-            search: Search by name or email (name only - email search requires auth admin)
-            sort_by: Field to sort by (created_at, name)
+            search: Search by name or email
+            sort_by: Field to sort by (created_at, name, last_sign_in_at)
             sort_order: asc or desc
             limit: Max users to return
             offset: Pagination offset
@@ -772,111 +872,50 @@ class ModerationService:
             Dictionary with users list and total count
         """
         try:
-            # Build query for public.users table
-            # Note: email and last_sign_in_at are in auth.users, not public.users
-            query = self.supabase.table("users")\
-                .select(
-                    "id, name, avatar_url, created_at",
-                    count="exact"
-                )
+            # Call the optimized Supabase function
+            response = self.supabase.rpc(
+                "get_admin_users_list",
+                {
+                    "p_status": status,
+                    "p_is_premium": is_premium,
+                    "p_search": search,
+                    "p_sort_by": sort_by,
+                    "p_sort_order": sort_order,
+                    "p_limit": limit,
+                    "p_offset": offset
+                }
+            ).execute()
 
-            # Apply search filter (name only - email is in auth.users)
-            if search:
-                query = query.ilike("name", f"%{search}%")
-
-            # Apply sorting (only fields in public.users)
-            if sort_by in ["created_at", "name"]:
-                query = query.order(sort_by, desc=(sort_order == "desc"))
-            else:
-                query = query.order("created_at", desc=(sort_order == "desc"))
-
-            # Apply pagination
-            query = query.limit(limit).offset(offset)
-
-            response = query.execute()
-
-            # Get moderation and subscription data for these users
-            user_ids = [u["id"] for u in (response.data or [])]
-
-            if not user_ids:
+            if not response.data:
                 return {"users": [], "total": 0}
 
-            # Get auth user data (email, last_sign_in_at) via admin API
-            auth_by_user: Dict[str, dict] = {}
-            for uid in user_ids:
-                try:
-                    auth_user = self.supabase.auth.admin.get_user_by_id(uid)
-                    if auth_user and auth_user.user:
-                        auth_by_user[uid] = {
-                            "email": auth_user.user.email,
-                            "last_sign_in_at": auth_user.user.last_sign_in_at
-                        }
-                except Exception as auth_err:
-                    logger.warning(f"Could not fetch auth data for user {uid}: {auth_err}")
+            # Get total from first row (all rows have the same total_count)
+            total = response.data[0]["total_count"] if response.data else 0
 
-            # Get moderation records
-            mod_response = self.supabase.table("user_moderation")\
-                .select("*")\
-                .in_("user_id", user_ids)\
-                .execute()
-            mod_by_user = {m["user_id"]: m for m in (mod_response.data or [])}
-
-            # Get subscription records
-            sub_response = self.supabase.table("user_subscriptions")\
-                .select("user_id, is_active, expires_at, is_trial")\
-                .in_("user_id", user_ids)\
-                .execute()
-            sub_by_user = {s["user_id"]: s for s in (sub_response.data or [])}
-
-            # Get reports submitted by each user
-            reports_response = self.supabase.table("content_reports")\
-                .select("reporter_user_id")\
-                .in_("reporter_user_id", user_ids)\
-                .execute()
-            reports_by_user: Dict[str, int] = {}
-            for r in (reports_response.data or []):
-                uid = r["reporter_user_id"]
-                reports_by_user[uid] = reports_by_user.get(uid, 0) + 1
-
-            # Transform data
+            # Transform data to match expected schema
             users = []
-            for user in response.data or []:
-                user_id = user["id"]
-                auth_data = auth_by_user.get(user_id, {})
-                moderation = mod_by_user.get(user_id, {})
-                subscription = sub_by_user.get(user_id, {})
-
-                user_item = {
-                    "id": user_id,
-                    "name": user.get("name"),
-                    "email": auth_data.get("email"),
-                    "avatar_url": user.get("avatar_url"),
-                    "created_at": user["created_at"],
-                    "last_sign_in_at": auth_data.get("last_sign_in_at"),
-                    "moderation_status": moderation.get("status", "good_standing"),
-                    "warning_count": moderation.get("warning_count", 0),
-                    "report_count": moderation.get("report_count", 0),
-                    "reports_submitted": reports_by_user.get(user_id, 0),
-                    "false_report_count": moderation.get("false_report_count", 0),
-                    "reporter_reliability_score": moderation.get("reporter_reliability_score", 100) / 100.0,
-                    "is_premium": subscription.get("is_active", False),
-                    "subscription_expires_at": subscription.get("expires_at"),
-                    "is_trial": subscription.get("is_trial", False),
-                }
-
-                # Apply status filter (after fetching since we need to join)
-                if status and user_item["moderation_status"] != status:
-                    continue
-
-                # Apply premium filter
-                if is_premium is not None and user_item["is_premium"] != is_premium:
-                    continue
-
-                users.append(user_item)
+            for row in response.data:
+                users.append({
+                    "id": row["id"],
+                    "name": row["name"],
+                    "email": row["email"],
+                    "avatar_url": row["avatar_url"],
+                    "created_at": row["created_at"],
+                    "last_sign_in_at": row["last_sign_in_at"],
+                    "moderation_status": row["moderation_status"],
+                    "warning_count": row["warning_count"],
+                    "report_count": row["report_count"],
+                    "reports_submitted": row["reports_submitted"],
+                    "false_report_count": row["false_report_count"],
+                    "reporter_reliability_score": float(row["reporter_reliability_score"]),
+                    "is_premium": row["is_premium"],
+                    "subscription_expires_at": row["subscription_expires_at"],
+                    "is_trial": row["is_trial"],
+                })
 
             return {
                 "users": users,
-                "total": response.count or len(users)
+                "total": total
             }
 
         except Exception as e:
@@ -889,6 +928,7 @@ class ModerationService:
     ) -> Dict[str, Any]:
         """
         Get complete moderation details for a user including feedback and subscription.
+        Uses optimized Supabase functions for faster queries.
 
         Args:
             user_id: ID of the user
@@ -897,61 +937,138 @@ class ModerationService:
             Dictionary with moderation status, warnings, actions, feedback, and subscription
         """
         try:
-            # Get base moderation details
-            base_details = await self.get_user_moderation_details(user_id)
+            # Get user details using optimized function
+            user_details_response = self.supabase.rpc(
+                "get_admin_user_details",
+                {"p_user_id": user_id}
+            ).execute()
 
-            # Get user's extraction feedback
-            feedback_response = self.supabase.table("extraction_feedback")\
-                .select("*, recipes(id, title, image_url)")\
-                .eq("user_id", user_id)\
-                .order("created_at", desc=True)\
-                .limit(20)\
-                .execute()
+            user_details = user_details_response.data[0] if user_details_response.data else {}
 
-            # Get subscription info
-            sub_response = self.supabase.table("user_subscriptions")\
-                .select("is_active, product_id, expires_at, is_trial")\
-                .eq("user_id", user_id)\
-                .execute()
-            subscription = sub_response.data[0] if sub_response.data else {}
+            # Get warnings using optimized function
+            warnings_response = self.supabase.rpc(
+                "get_user_warnings",
+                {"p_user_id": user_id}
+            ).execute()
 
-            # Get user created_at from public.users
-            user_response = self.supabase.table("users")\
-                .select("created_at")\
-                .eq("id", user_id)\
-                .single()\
-                .execute()
-            user_data = user_response.data or {}
+            warnings = []
+            for w in (warnings_response.data or []):
+                warnings.append({
+                    "id": w["id"],
+                    "user_id": user_id,  # Required by UserWarningAdmin schema
+                    "issued_by": w["issuer_id"],  # Required by UserWarningAdmin schema
+                    "reason": w["reason"],
+                    "content_report_id": w["content_report_id"],
+                    "recipe_id": w["recipe_id"],
+                    "acknowledged_at": w["acknowledged_at"],
+                    "created_at": w["created_at"],
+                    "issuer": {
+                        "id": w["issuer_id"],
+                        "name": w["issuer_name"],
+                        "avatar_url": w["issuer_avatar_url"]
+                    } if w["issuer_id"] else None,
+                    "recipes": {
+                        "id": w["recipe_id"],
+                        "title": w["recipe_title"],
+                        "image_url": w["recipe_image_url"]
+                    } if w["recipe_id"] and w["recipe_title"] else None
+                })
 
-            # Get email and last_sign_in_at from auth.users via admin API
-            auth_data = {}
-            try:
-                auth_user = self.supabase.auth.admin.get_user_by_id(user_id)
-                if auth_user and auth_user.user:
-                    auth_data = {
-                        "email": auth_user.user.email,
-                        "last_sign_in_at": auth_user.user.last_sign_in_at
-                    }
-            except Exception as auth_err:
-                logger.warning(f"Could not fetch auth data for user {user_id}: {auth_err}")
+            # Get moderation actions using optimized function
+            actions_response = self.supabase.rpc(
+                "get_user_moderation_actions",
+                {"p_user_id": user_id}
+            ).execute()
 
-            # Count reports submitted by this user
-            reports_count_response = self.supabase.table("content_reports")\
-                .select("id", count="exact")\
-                .eq("reporter_user_id", user_id)\
-                .execute()
+            actions = []
+            for a in (actions_response.data or []):
+                actions.append({
+                    "id": a["id"],
+                    "moderator_id": a["moderator_id"],  # Required by ModerationActionAdmin schema
+                    "action_type": a["action_type"],
+                    "reason": a["reason"],
+                    "notes": a["notes"],
+                    "duration_days": a["duration_days"],
+                    "target_user_id": user_id,  # Required by ModerationActionAdmin schema
+                    "target_recipe_id": a["target_recipe_id"],
+                    "created_at": a["created_at"],
+                    "moderator": {
+                        "id": a["moderator_id"],
+                        "name": a["moderator_name"],
+                        "avatar_url": a["moderator_avatar_url"]
+                    } if a["moderator_id"] else None,
+                    "target_recipe": {
+                        "id": a["target_recipe_id"],
+                        "title": a["target_recipe_title"],
+                        "image_url": a["target_recipe_image_url"]
+                    } if a["target_recipe_id"] and a["target_recipe_title"] else None
+                })
+
+            # Get user feedback using optimized function
+            feedback_response = self.supabase.rpc(
+                "get_user_feedback",
+                {"p_user_id": user_id, "p_limit": 20}
+            ).execute()
+
+            feedback = []
+            for f in (feedback_response.data or []):
+                feedback.append({
+                    "id": f["id"],
+                    "recipe_id": f["recipe_id"],
+                    "category": f["category"],
+                    "description": f["description"],
+                    "status": f["status"],
+                    "created_at": f["created_at"],
+                    "resolved_at": f["resolved_at"],
+                    "was_helpful": f["was_helpful"],
+                    "recipes": {
+                        "id": f["recipe_id"],
+                        "title": f["recipe_title"],
+                        "image_url": f["recipe_image_url"]
+                    } if f["recipe_id"] and f["recipe_title"] else None
+                })
+
+            # For users without a moderation record, we need to provide default timestamps
+            # Use user created_at as fallback for moderation timestamps
+            user_created_at = user_details.get("created_at")
+            moderation_id = user_details.get("moderation_id")
+            moderation_created_at = user_details.get("moderation_created_at") or user_created_at
+            moderation_updated_at = user_details.get("moderation_updated_at") or user_created_at
+
+            # If no moderation record exists, generate a placeholder ID based on user_id
+            if not moderation_id:
+                moderation_id = user_id  # Use user_id as placeholder
 
             return {
-                **base_details,
-                "email": auth_data.get("email"),
-                "created_at": user_data.get("created_at"),
-                "last_sign_in_at": auth_data.get("last_sign_in_at"),
-                "feedback": feedback_response.data or [],
-                "reports_submitted": reports_count_response.count or 0,
-                "is_premium": subscription.get("is_active", False),
-                "subscription_product_id": subscription.get("product_id"),
-                "subscription_expires_at": subscription.get("expires_at"),
-                "is_trial": subscription.get("is_trial", False),
+                "user": {
+                    "id": user_details.get("user_id"),
+                    "name": user_details.get("user_name"),
+                    "avatar_url": user_details.get("user_avatar_url")
+                } if user_details.get("user_id") else None,
+                "moderation": {
+                    "id": moderation_id,
+                    "user_id": user_id,
+                    "status": user_details.get("moderation_status", "good_standing"),
+                    "warning_count": user_details.get("warning_count", 0),
+                    "report_count": user_details.get("report_count", 0),
+                    "false_report_count": user_details.get("false_report_count", 0),
+                    "reporter_reliability_score": user_details.get("reporter_reliability_score", 100),
+                    "suspended_until": user_details.get("suspended_until"),
+                    "ban_reason": user_details.get("ban_reason"),
+                    "created_at": moderation_created_at,
+                    "updated_at": moderation_updated_at
+                },
+                "warnings": warnings,
+                "actions": actions,
+                "email": user_details.get("email"),
+                "created_at": user_details.get("created_at"),
+                "last_sign_in_at": user_details.get("last_sign_in_at"),
+                "feedback": feedback,
+                "reports_submitted": user_details.get("reports_submitted", 0),
+                "is_premium": user_details.get("is_premium", False),
+                "subscription_product_id": user_details.get("subscription_product_id"),
+                "subscription_expires_at": user_details.get("subscription_expires_at"),
+                "is_trial": user_details.get("is_trial", False),
             }
 
         except Exception as e:
