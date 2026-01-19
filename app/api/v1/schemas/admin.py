@@ -379,3 +379,29 @@ class UserModerationDetailEnhancedAdmin(BaseModel):
 class DeleteUserRequest(BaseModel):
     """Request to delete a user"""
     reason: str = Field(..., max_length=500, description="Reason for deletion")
+
+
+# =============================================================================
+# HIDDEN RECIPES SCHEMAS
+# =============================================================================
+
+
+class HiddenRecipeAdmin(BaseModel):
+    """Hidden recipe for admin view"""
+    id: str
+    title: str
+    image_url: Optional[str] = None
+    source_url: Optional[str] = None
+    hidden_at: Optional[datetime] = None
+    hidden_reason: Optional[str] = None
+    created_by: Optional[str] = None
+
+    # Nested objects
+    owner: Optional[UserSummaryAdmin] = None
+    hidden_by: Optional[UserSummaryAdmin] = None
+
+
+class HiddenRecipesResponse(BaseModel):
+    """Response for hidden recipes list"""
+    recipes: List[HiddenRecipeAdmin]
+    total: int

@@ -34,6 +34,8 @@ from app.api.v1.schemas.admin import (
     UserListItemAdmin,
     UserListResponse,
     ModerationStatisticsResponse,
+    HiddenRecipeAdmin,
+    HiddenRecipesResponse,
 )
 from app.api.v1.schemas.common import MessageResponse
 
@@ -394,6 +396,39 @@ async def resolve_feedback(
 # =============================================================================
 # RECIPE MODERATION
 # =============================================================================
+
+
+@router.get(
+    "/recipes/hidden",
+    response_model=HiddenRecipesResponse,
+    summary="Get hidden recipes",
+    description="Get paginated list of hidden recipes with moderation details"
+)
+async def get_hidden_recipes(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_admin_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """Get list of all hidden recipes with owner and moderator info"""
+    try:
+        service = ModerationService(supabase)
+        result = await service.get_hidden_recipes(
+            limit=limit,
+            offset=offset
+        )
+
+        return HiddenRecipesResponse(
+            recipes=[HiddenRecipeAdmin(**r) for r in result["recipes"]],
+            total=result["total"]
+        )
+
+    except Exception as e:
+        logger.error(f"Error fetching hidden recipes: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch hidden recipes"
+        )
 
 
 @router.post(

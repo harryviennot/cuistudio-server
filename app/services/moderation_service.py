@@ -344,6 +344,120 @@ class ModerationService:
     # RECIPE MODERATION
     # =========================================================================
 
+    async def get_hidden_recipes(
+        self,
+        limit: int = 50,
+        offset: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Get paginated list of hidden recipes with moderation details.
+
+        Args:
+            limit: Maximum number of recipes to return
+            offset: Pagination offset
+
+        Returns:
+            Dictionary with hidden_recipes list and total count
+        """
+        try:
+            # Query hidden recipes
+            response = self.supabase.table("recipes")\
+                .select("""
+                    id,
+                    title,
+                    image_url,
+                    source_url,
+                    is_hidden,
+                    hidden_at,
+                    hidden_reason,
+                    created_by
+                """)\
+                .eq("is_hidden", True)\
+                .order("hidden_at", desc=True)\
+                .range(offset, offset + limit - 1)\
+                .execute()
+
+            # Get total count
+            count_response = self.supabase.table("recipes")\
+                .select("id", count="exact")\
+                .eq("is_hidden", True)\
+                .execute()
+
+            total = count_response.count or 0
+
+            # Collect unique user IDs for batch lookup
+            user_ids = set()
+            for recipe in (response.data or []):
+                if recipe.get("created_by"):
+                    user_ids.add(recipe["created_by"])
+
+            # Batch fetch user info
+            users_map = {}
+            if user_ids:
+                users_response = self.supabase.table("users")\
+                    .select("id, name, avatar_url")\
+                    .in_("id", list(user_ids))\
+                    .execute()
+                for user in (users_response.data or []):
+                    users_map[user["id"]] = user
+
+            # Get moderation action info for each recipe (who hid it)
+            recipes_with_actions = []
+            for recipe in (response.data or []):
+                # Find the most recent hide action for this recipe
+                action_response = self.supabase.table("moderation_actions")\
+                    .select("""
+                        id,
+                        moderator_id,
+                        reason,
+                        created_at
+                    """)\
+                    .eq("target_recipe_id", recipe["id"])\
+                    .eq("action_type", "hide_recipe")\
+                    .order("created_at", desc=True)\
+                    .limit(1)\
+                    .execute()
+
+                hidden_by = None
+                if action_response.data:
+                    action = action_response.data[0]
+                    moderator_id = action.get("moderator_id")
+                    if moderator_id:
+                        # Fetch moderator info if not already in cache
+                        if moderator_id not in users_map:
+                            mod_response = self.supabase.table("users")\
+                                .select("id, name, avatar_url")\
+                                .eq("id", moderator_id)\
+                                .single()\
+                                .execute()
+                            if mod_response.data:
+                                users_map[moderator_id] = mod_response.data
+                        hidden_by = users_map.get(moderator_id)
+
+                # Get owner info from cache
+                owner = users_map.get(recipe.get("created_by"))
+
+                recipes_with_actions.append({
+                    "id": recipe["id"],
+                    "title": recipe["title"],
+                    "image_url": recipe.get("image_url"),
+                    "source_url": recipe.get("source_url"),
+                    "hidden_at": recipe.get("hidden_at"),
+                    "hidden_reason": recipe.get("hidden_reason"),
+                    "created_by": recipe.get("created_by"),
+                    "owner": owner,
+                    "hidden_by": hidden_by
+                })
+
+            return {
+                "recipes": recipes_with_actions,
+                "total": total
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting hidden recipes: {str(e)}")
+            raise
+
     async def hide_recipe(
         self,
         moderator_id: str,
