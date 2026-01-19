@@ -91,3 +91,61 @@ class ReferralSource(str, Enum):
     """Source of referral credits"""
     REFERRER = "referrer"
     REFEREE = "referee"
+
+
+# =============================================================================
+# MODERATION ENUMS
+# =============================================================================
+
+
+class ContentReportReason(str, Enum):
+    """Reasons for reporting recipe content"""
+    INAPPROPRIATE_CONTENT = "inappropriate_content"  # Explicit, violent, or otherwise inappropriate
+    HATE_SPEECH = "hate_speech"  # Hate speech or discrimination
+    COPYRIGHT_VIOLATION = "copyright_violation"  # Copyrighted content without permission
+    SPAM_ADVERTISING = "spam_advertising"  # Spam or advertising
+    MISINFORMATION = "misinformation"  # Dangerous cooking advice (food safety)
+    OTHER = "other"  # Other (requires description)
+
+
+class ExtractionFeedbackCategory(str, Enum):
+    """Categories for extraction quality feedback"""
+    WRONG_INGREDIENTS = "wrong_ingredients"  # Ingredients don't match source
+    MISSING_STEPS = "missing_steps"  # Instructions missing steps
+    INCORRECT_STEPS = "incorrect_steps"  # Instructions are wrong
+    BAD_FORMATTING = "bad_formatting"  # Formatting issues, unclear text
+    WRONG_MEASUREMENTS = "wrong_measurements"  # Quantities wrong
+    WRONG_SERVINGS = "wrong_servings"  # Serving count incorrect
+    AI_HALLUCINATION = "ai_hallucination"  # AI added content not in source
+    WRONG_TITLE = "wrong_title"  # Title doesn't match recipe
+    WRONG_IMAGE = "wrong_image"  # Image doesn't match recipe
+    OTHER = "other"  # Other (requires description)
+
+
+class ReportStatus(str, Enum):
+    """Status of a report or feedback"""
+    PENDING = "pending"  # Awaiting review
+    IN_REVIEW = "in_review"  # Being reviewed by moderator
+    RESOLVED = "resolved"  # Resolved (action taken or dismissed)
+    ESCALATED = "escalated"  # Escalated for further review
+
+
+class UserModerationStatus(str, Enum):
+    """User moderation status"""
+    GOOD_STANDING = "good_standing"  # Normal user
+    WARNED = "warned"  # Has received warnings
+    SUSPENDED = "suspended"  # Temporarily suspended
+    BANNED = "banned"  # Permanently banned
+
+
+class ModerationActionType(str, Enum):
+    """Types of moderation actions"""
+    DISMISS_REPORT = "dismiss_report"  # No action needed
+    HIDE_RECIPE = "hide_recipe"  # Remove from public view
+    UNHIDE_RECIPE = "unhide_recipe"  # Restore to public view
+    WARN_USER = "warn_user"  # Issue warning to user
+    SUSPEND_USER = "suspend_user"  # Temporary suspension
+    UNSUSPEND_USER = "unsuspend_user"  # Remove suspension
+    BAN_USER = "ban_user"  # Permanent ban
+    UNBAN_USER = "unban_user"  # Remove ban
+    RESOLVE_FEEDBACK = "resolve_feedback"  # Mark extraction feedback as resolved
