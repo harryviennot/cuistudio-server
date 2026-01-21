@@ -407,6 +407,92 @@ class ExtractionService:
             logger.error(f"Error getting job status: {str(e)}")
             raise
 
+    async def list_user_jobs(self, user_id: str) -> List[Dict[str, Any]]:
+        """
+        List all pending/recent extraction jobs for a user.
+
+        Returns jobs from the last 24 hours that are:
+        - pending, processing, needs_client_download (in progress)
+        - completed with recipe_id (awaiting user review)
+        - failed (for retry)
+
+        Args:
+            user_id: The user's ID
+
+        Returns:
+            List of extraction job dicts
+        """
+        try:
+            from datetime import datetime, timedelta
+            import json
+
+            # Get jobs from last 24 hours
+            cutoff_time = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+
+            result = await asyncio.to_thread(
+                lambda: self.supabase.table("extraction_jobs")
+                    .select("*")
+                    .eq("user_id", user_id)
+                    .gte("created_at", cutoff_time)
+                    .in_("status", [
+                        ExtractionStatus.PENDING.value,
+                        ExtractionStatus.PROCESSING.value,
+                        ExtractionStatus.NEEDS_CLIENT_DOWNLOAD.value,
+                        ExtractionStatus.COMPLETED.value,
+                        ExtractionStatus.FAILED.value,
+                    ])
+                    .order("created_at", desc=True)
+                    .execute()
+            )
+
+            jobs = result.data if result.data else []
+
+            # Handle video_metadata - may be stored as JSON string (legacy) or dict
+            for job in jobs:
+                if job.get("video_metadata") and isinstance(job["video_metadata"], str):
+                    try:
+                        job["video_metadata"] = json.loads(job["video_metadata"])
+                    except json.JSONDecodeError:
+                        job["video_metadata"] = None
+
+            # Filter out completed jobs where the recipe has already been saved (is_draft=false)
+            # This prevents saved recipes from reappearing in the pending list
+            completed_job_recipe_ids = [
+                job["recipe_id"] for job in jobs
+                if job.get("status") == ExtractionStatus.COMPLETED.value and job.get("recipe_id")
+            ]
+
+            if completed_job_recipe_ids:
+                # Check which recipes are still drafts
+                recipes_result = await asyncio.to_thread(
+                    lambda: self.supabase.table("recipes")
+                        .select("id, is_draft")
+                        .in_("id", completed_job_recipe_ids)
+                        .execute()
+                )
+                recipes_data = recipes_result.data if recipes_result.data else []
+
+                # Build set of saved (non-draft) recipe IDs
+                saved_recipe_ids = {
+                    r["id"] for r in recipes_data
+                    if r.get("is_draft") is False
+                }
+
+                # Filter out jobs with saved recipes
+                jobs = [
+                    job for job in jobs
+                    if not (
+                        job.get("status") == ExtractionStatus.COMPLETED.value
+                        and job.get("recipe_id") in saved_recipe_ids
+                    )
+                ]
+
+            return jobs
+
+        except Exception as e:
+            logger.error(f"Error listing user jobs: {str(e)}")
+            raise
+
     async def cancel_extraction_job(self, job_id: str, user_id: str) -> Dict[str, str]:
         """
         Cancel an extraction job.

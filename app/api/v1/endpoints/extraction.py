@@ -202,6 +202,34 @@ async def submit_image_extraction(
         )
 
 
+@router.get("/jobs", response_model=List[ExtractionJobResponse])
+async def list_user_extraction_jobs(
+    request: Request,
+    current_user: dict = Depends(get_authenticated_user),
+    admin_client: Client = Depends(get_supabase_admin_client)
+):
+    """
+    List all pending/recent extraction jobs for the current user.
+
+    Returns jobs from the last 24 hours that are:
+    - pending, processing, needs_client_download (in progress)
+    - completed with recipe_id (awaiting user review)
+    - failed (for retry)
+
+    Jobs older than 24 hours or already saved (draft published) are excluded.
+    """
+    try:
+        extraction_service = ExtractionService(admin_client)
+        jobs = await extraction_service.list_user_jobs(current_user["id"])
+        return [ExtractionJobResponse(**job) for job in jobs]
+    except Exception as e:
+        logger.error(f"Error listing extraction jobs: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list extraction jobs: {str(e)}"
+        )
+
+
 @router.get("/jobs/{job_id}", response_model=ExtractionJobResponse)
 async def get_extraction_job(
     job_id: str,
