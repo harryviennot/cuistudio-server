@@ -9,7 +9,7 @@ Handles scheduled push notifications using APScheduler:
 """
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Dict, Any
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ async def process_first_recipe_nudge(supabase_url: str, supabase_key: str) -> Di
     Runs daily at 18:00 UTC to batch notifications at an engaging evening time.
     """
     from supabase import create_client
-    from app.services.push_notification_service import PushNotificationService, NotificationType
+    from app.services.push_notification_service import PushNotificationService
 
     stats = {"checked": 0, "sent": 0, "errors": 0}
 
