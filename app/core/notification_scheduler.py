@@ -16,9 +16,9 @@ logger = logging.getLogger(__name__)
 
 async def process_first_recipe_nudge(supabase_url: str, supabase_key: str) -> Dict[str, Any]:
     """
-    Send nudge to users who signed up 24h ago but haven't extracted any recipes.
+    Send nudge to users who signed up 24-48h ago but haven't extracted any recipes.
 
-    Runs hourly to catch users at appropriate times.
+    Runs daily at 18:00 UTC to batch notifications at an engaging evening time.
     """
     from supabase import create_client
     from app.services.push_notification_service import PushNotificationService, NotificationType
@@ -30,13 +30,13 @@ async def process_first_recipe_nudge(supabase_url: str, supabase_key: str) -> Di
         push_service = PushNotificationService(supabase)
 
         # Find users who:
-        # - Signed up between 23-25 hours ago (to catch them in the hourly window)
+        # - Signed up between 24-48 hours ago (daily batch window)
         # - Have no recipes
         # - Have notification preferences enabled
         # - Haven't received this notification yet
         now = datetime.now(timezone.utc)
-        window_start = now - timedelta(hours=25)
-        window_end = now - timedelta(hours=23)
+        window_start = now - timedelta(hours=48)
+        window_end = now - timedelta(hours=24)
 
         result = supabase.rpc("get_first_recipe_nudge_eligible_users", {
             "window_start": window_start.isoformat(),
@@ -248,13 +248,13 @@ def start_notification_scheduler(supabase_url: str, supabase_key: str):
 
     scheduler = AsyncIOScheduler()
 
-    # First recipe nudge - every hour
+    # First recipe nudge - daily at 18:00 UTC (evening engagement)
     scheduler.add_job(
         process_first_recipe_nudge,
-        trigger=IntervalTrigger(hours=1),
+        trigger=CronTrigger(hour=18, minute=0, timezone="UTC"),
         args=[supabase_url, supabase_key],
         id="first_recipe_nudge",
-        name="First recipe nudge (24h after signup)",
+        name="First recipe nudge (24-48h after signup)",
         replace_existing=True
     )
 
@@ -291,7 +291,7 @@ def start_notification_scheduler(supabase_url: str, supabase_key: str):
     scheduler.start()
     logger.info(
         "Started notification scheduler with jobs: "
-        "first_recipe_nudge (hourly), weekly_credits_refresh (Mon 12:00 UTC), "
+        "first_recipe_nudge (daily 18:00 UTC), weekly_credits_refresh (Mon 12:00 UTC), "
         "cook_tonight (hourly), miss_you (daily 18:00 UTC)"
     )
 
