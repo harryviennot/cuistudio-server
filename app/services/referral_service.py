@@ -14,8 +14,12 @@ import logging
 
 from app.domain.enums import ReferralSource
 from app.services.credit_service import CreditService, REFERRAL_BONUS_CREDITS
+from app.services.push_notification_service import PushNotificationService
 
 logger = logging.getLogger(__name__)
+
+# Auto-disable referral notifications after this many referrals (for content creators)
+REFERRAL_NOTIFICATION_THRESHOLD = 10
 
 
 class ReferralService:
@@ -24,6 +28,7 @@ class ReferralService:
     def __init__(self, supabase: Client):
         self.supabase = supabase
         self.credit_service = CreditService(supabase)
+        self.push_service = PushNotificationService(supabase)
 
     async def get_or_create_referral_code(self, user_id: str) -> str:
         """
@@ -142,6 +147,20 @@ class ReferralService:
                 f"Referral redeemed: code={code}, referrer={referrer_user_id}, "
                 f"referee={referee_user_id}, credits={REFERRAL_BONUS_CREDITS}"
             )
+
+            # Send notification to referrer (if under threshold)
+            # Auto-disable for content creators with many referrals
+            new_uses_count = referral_code["uses_count"] + 1
+            if new_uses_count <= REFERRAL_NOTIFICATION_THRESHOLD:
+                # Get referee name for notification
+                referee_response = self.supabase.table("users").select("name").eq("id", referee_user_id).execute()
+                referee_name = referee_response.data[0].get("name", "Someone") if referee_response.data else "Someone"
+
+                await self.push_service.send_referral_activated(
+                    user_id=referrer_user_id,
+                    referee_name=referee_name,
+                    credits_earned=REFERRAL_BONUS_CREDITS
+                )
 
             return True, "success"
 

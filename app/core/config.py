@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     REVENUECAT_API_KEY: Optional[str] = None  # Secret API key for fetching customer info
     REVENUECAT_PROJECT_ID: Optional[str] = None  # Project ID from RevenueCat dashboard
 
+    # Expo Push Notifications
+    EXPO_ACCESS_TOKEN: Optional[str] = None  # For authenticated Expo Push API
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
