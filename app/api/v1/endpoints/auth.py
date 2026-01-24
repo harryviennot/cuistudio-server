@@ -1124,6 +1124,19 @@ async def get_me(
         # Non-critical - log and continue without warnings
         logger.warning(f"Failed to fetch user warnings: {e}")
 
+    # Check if user has ever registered a push token (for notification prompt logic)
+    has_push_token = False
+    try:
+        token_result = admin_client.table("push_tokens")\
+            .select("id")\
+            .eq("user_id", current_user["id"])\
+            .limit(1)\
+            .execute()
+        has_push_token = len(token_result.data) > 0
+    except Exception as e:
+        # Non-critical - log and continue
+        logger.warning(f"Failed to check push token history: {e}")
+
     return UserResponse(
         id=current_user["id"],
         email=current_user.get("email"),
@@ -1132,7 +1145,8 @@ async def get_me(
         user_metadata=current_user.get("user_metadata", {}),
         is_new_user=current_user.get("is_new_user", False),
         is_anonymous=current_user.get("is_anonymous", False),
-        unacknowledged_warnings=warnings
+        unacknowledged_warnings=warnings,
+        has_registered_push_token=has_push_token
     )
 
 

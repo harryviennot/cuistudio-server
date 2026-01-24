@@ -148,6 +148,7 @@ class UserResponse(BaseModel):
     is_new_user: bool = False
     is_anonymous: bool = False
     unacknowledged_warnings: List[UserWarning] = []
+    has_registered_push_token: bool = False
 
 
 class AuthResponse(BaseModel):
