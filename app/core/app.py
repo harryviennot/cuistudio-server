@@ -103,10 +103,25 @@ def create_app() -> FastAPI:
         extraction_per_minute=settings.EXTRACTION_RATE_LIMIT_PER_MINUTE
     )
 
-    # CORS Middleware
+    # CORS Middleware - Development allows common localhost ports
+    if settings.is_production:
+        cors_origins = settings.cors_origins_list
+    else:
+        # In development, allow common localhost ports + configured origins
+        cors_origins = list(set([
+            "http://localhost:3000",
+            "http://localhost:3001",
+            "http://localhost:8080",
+            "http://localhost:8081",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:3001",
+            "http://127.0.0.1:8080",
+            "http://127.0.0.1:8081",
+        ] + settings.cors_origins_list))
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins_list,
+        allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
