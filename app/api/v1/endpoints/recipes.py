@@ -821,8 +821,11 @@ async def mark_recipe_cooked(
     - duration_minutes: Optional actual cooking time in minutes
 
     If rating is provided, it also updates the user's current rating for the recipe.
+    Also updates cooking streak and sends milestone notifications.
     """
     try:
+        from app.services.push_notification_service import PushNotificationService
+
         repo = UserRecipeRepository(supabase)
 
         # Extract optional session data
@@ -837,6 +840,25 @@ async def mark_recipe_cooked(
             image_url=image_url,
             duration_minutes=duration_minutes
         )
+
+        # Update cooking streak and check for milestones
+        try:
+            streak_result = supabase.rpc("update_cooking_streak", {
+                "p_user_id": current_user["id"]
+            }).execute()
+
+            if streak_result.data and len(streak_result.data) > 0:
+                streak_data = streak_result.data[0]
+                if streak_data.get("is_milestone") and streak_data.get("milestone_days"):
+                    # Send cooking streak notification
+                    push_service = PushNotificationService(supabase)
+                    await push_service.send_cooking_streak(
+                        user_id=current_user["id"],
+                        streak_days=streak_data["milestone_days"]
+                    )
+        except Exception as streak_error:
+            # Don't fail the main request if streak tracking fails
+            logger.warning(f"Failed to update cooking streak: {streak_error}")
 
         return MessageResponse(message="Recipe marked as cooked")
 

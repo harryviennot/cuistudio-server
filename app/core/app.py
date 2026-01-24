@@ -54,6 +54,13 @@ async def lifespan(app: FastAPI):
         interval_hours=4
     )
 
+    # Start push notification scheduler
+    from app.core.notification_scheduler import start_notification_scheduler
+    notification_scheduler = start_notification_scheduler(
+        supabase_url=settings.SUPABASE_URL,
+        supabase_key=settings.SUPABASE_SECRET_KEY
+    )
+
     logger.info("Application startup complete")
 
     yield
@@ -66,6 +73,10 @@ async def lifespan(app: FastAPI):
     if cache_refresh_scheduler:
         cache_refresh_scheduler.shutdown(wait=False)
         logger.info("Cache refresh scheduler stopped")
+
+    if notification_scheduler:
+        notification_scheduler.shutdown(wait=False)
+        logger.info("Notification scheduler stopped")
 
     logger.info("Shutting down event broadcaster...")
     await shutdown_event_broadcaster()
