@@ -270,3 +270,21 @@ class VerifyEmailChangeRequest(BaseModel):
             }
         }
     }
+
+
+class UpdateLanguageRequest(BaseModel):
+    """Update user's preferred language for notifications"""
+    language: str = Field(
+        ...,
+        pattern=r"^(en|fr)$",
+        examples=["en", "fr"],
+        description="Language code (en or fr)"
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "language": "fr"
+            }
+        }
+    }

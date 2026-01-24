@@ -13,6 +13,7 @@ from enum import Enum
 from app.core.config import get_settings
 from app.repositories.push_token_repository import PushTokenRepository
 from app.repositories.notification_preferences_repository import NotificationPreferencesRepository
+from app.services.translation_service import get_translation_service, DEFAULT_LANGUAGE
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ class PushNotificationService:
         self.settings = get_settings()
         self.token_repo = PushTokenRepository(supabase)
         self.preferences_repo = NotificationPreferencesRepository(supabase)
+        self.translation_service = get_translation_service()
 
     def _get_headers(self) -> Dict[str, str]:
         """Get headers for Expo Push API request"""
@@ -299,25 +301,48 @@ class PushNotificationService:
             logger.error(f"Error logging notification: {e}")
             # Don't raise - logging is not critical
 
+    async def _get_user_language(self, user_id: str) -> str:
+        """Get user's preferred language for notifications"""
+        try:
+            result = self.supabase.table("users")\
+                .select("preferred_language")\
+                .eq("id", user_id)\
+                .execute()
+
+            if result.data and result.data[0].get("preferred_language"):
+                return result.data[0]["preferred_language"]
+        except Exception as e:
+            logger.warning(f"Error fetching user language for {user_id}: {e}")
+
+        return DEFAULT_LANGUAGE
+
     # ===== Convenience methods for specific notification types =====
 
     async def send_first_recipe_nudge(self, user_id: str) -> bool:
         """Send first recipe nudge to user who hasn't extracted a recipe yet"""
+        language = await self._get_user_language(user_id)
+        title, body = self.translation_service.get_notification_text(
+            "first_recipe_nudge", language
+        )
         return await self.send_notification(
             user_id=user_id,
             notification_type=NotificationType.FIRST_RECIPE_NUDGE,
-            title="Ready to cook something amazing?",
-            body="Add your first recipe and start your culinary journey!",
+            title=title,
+            body=body,
             data={"screen": "new-recipe"}
         )
 
     async def send_weekly_credits_refresh(self, user_id: str, credits: int) -> bool:
         """Notify user their weekly credits have been refreshed"""
+        language = await self._get_user_language(user_id)
+        title, body = self.translation_service.get_notification_text(
+            "weekly_credits_refresh", language, credits=credits
+        )
         return await self.send_notification(
             user_id=user_id,
             notification_type=NotificationType.WEEKLY_CREDITS_REFRESH,
-            title="Your credits are ready!",
-            body=f"You have {credits} free extractions this week. What will you cook?",
+            title=title,
+            body=body,
             data={"screen": "new-recipe"}
         )
 
@@ -328,11 +353,16 @@ class PushNotificationService:
         credits_earned: int
     ) -> bool:
         """Notify referrer when someone uses their code"""
+        language = await self._get_user_language(user_id)
+        title, body = self.translation_service.get_notification_text(
+            "referral_activated", language,
+            referee_name=referee_name, credits_earned=credits_earned
+        )
         return await self.send_notification(
             user_id=user_id,
             notification_type=NotificationType.REFERRAL_ACTIVATED,
-            title="You earned bonus credits!",
-            body=f"{referee_name} joined Cuisto with your code. +{credits_earned} credits!",
+            title=title,
+            body=body,
             data={"screen": "settings", "section": "referral"}
         )
 
@@ -343,11 +373,15 @@ class PushNotificationService:
         recipe_title: str
     ) -> bool:
         """Suggest a recipe to cook tonight"""
+        language = await self._get_user_language(user_id)
+        title, body = self.translation_service.get_notification_text(
+            "cook_tonight", language, recipe_title=recipe_title
+        )
         return await self.send_notification(
             user_id=user_id,
             notification_type=NotificationType.COOK_TONIGHT,
-            title="What's for dinner?",
-            body=f"How about making {recipe_title} tonight?",
+            title=title,
+            body=body,
             data={"screen": "recipe", "recipe_id": recipe_id}
         )
 
@@ -357,34 +391,47 @@ class PushNotificationService:
         streak_days: int
     ) -> bool:
         """Celebrate cooking streak milestone"""
-        emoji = ""
+        language = await self._get_user_language(user_id)
+
+        # Determine emoji and body key based on streak milestone
         if streak_days >= 30:
             emoji = " "
-            message = f"Legendary! {streak_days} days of cooking in a row!"
+            body_key = "body_30"
         elif streak_days >= 14:
             emoji = " "
-            message = f"Amazing! {streak_days} day cooking streak!"
+            body_key = "body_14"
         elif streak_days >= 7:
             emoji = " "
-            message = f"One week strong! {streak_days} days cooking!"
+            body_key = "body_7"
         else:
             emoji = " "
-            message = f"{streak_days} day cooking streak! Keep it up!"
+            body_key = "body_default"
+
+        title = self.translation_service.translate(
+            "notifications.cooking_streak.title", language, emoji=emoji
+        )
+        body = self.translation_service.translate(
+            f"notifications.cooking_streak.{body_key}", language, streak_days=streak_days
+        )
 
         return await self.send_notification(
             user_id=user_id,
             notification_type=NotificationType.COOKING_STREAK,
-            title=f"Cooking Streak{emoji}",
-            body=message,
+            title=title,
+            body=body,
             data={"screen": "library"}
         )
 
     async def send_miss_you(self, user_id: str) -> bool:
         """Re-engage user who hasn't been active"""
+        language = await self._get_user_language(user_id)
+        title, body = self.translation_service.get_notification_text(
+            "miss_you", language
+        )
         return await self.send_notification(
             user_id=user_id,
             notification_type=NotificationType.MISS_YOU,
-            title="We miss you in the kitchen!",
-            body="Your recipes are waiting. Come back and cook something delicious!",
+            title=title,
+            body=body,
             data={"screen": "library"}
         )

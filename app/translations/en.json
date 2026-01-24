@@ -1,0 +1,31 @@
+{
+  "notifications": {
+    "first_recipe_nudge": {
+      "title": "Ready to cook something amazing?",
+      "body": "Add your first recipe and start your culinary journey!"
+    },
+    "weekly_credits_refresh": {
+      "title": "Your credits are ready!",
+      "body": "You have {credits} free extractions this week. What will you cook?"
+    },
+    "referral_activated": {
+      "title": "You earned bonus credits!",
+      "body": "{referee_name} joined Cuisto with your code. +{credits_earned} credits!"
+    },
+    "cook_tonight": {
+      "title": "What's for dinner?",
+      "body": "How about making {recipe_title} tonight?"
+    },
+    "cooking_streak": {
+      "title": "Cooking Streak{emoji}",
+      "body_30": "Legendary! {streak_days} days of cooking in a row!",
+      "body_14": "Amazing! {streak_days} day cooking streak!",
+      "body_7": "One week strong! {streak_days} days cooking!",
+      "body_default": "{streak_days} day cooking streak! Keep it up!"
+    },
+    "miss_you": {
+      "title": "We miss you in the kitchen!",
+      "body": "Your recipes are waiting. Come back and cook something delicious!"
+    }
+  }
+}
