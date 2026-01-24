@@ -96,9 +96,31 @@ class UnbanUserRequest(BaseModel):
     reason: str = Field(..., max_length=500, description="Reason for unban")
 
 
+class SendNotificationRequest(BaseModel):
+    """Request to send a push notification"""
+    user_id: Optional[str] = Field(
+        None,
+        description="Target user ID. If None, broadcasts to all users with active tokens"
+    )
+    title: str = Field(..., min_length=1, max_length=100, description="Notification title")
+    body: str = Field(..., min_length=1, max_length=500, description="Notification body")
+    data: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Optional payload data for deep linking"
+    )
+
+
 # =============================================================================
 # RESPONSE SCHEMAS
 # =============================================================================
+
+
+class SendNotificationResponse(BaseModel):
+    """Response from sending a notification"""
+    success: bool
+    message: str
+    sent_count: int = 0
+    failed_count: int = 0
 
 
 class UserSummaryAdmin(BaseModel):

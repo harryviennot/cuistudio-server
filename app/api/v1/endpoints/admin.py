@@ -22,6 +22,7 @@ from app.api.v1.schemas.admin import (
     UnsuspendUserRequest,
     UnbanUserRequest,
     DeleteUserRequest,
+    SendNotificationRequest,
     # Response schemas
     AdminMeResponse,
     ContentReportAdmin,
@@ -38,6 +39,7 @@ from app.api.v1.schemas.admin import (
     AdminRecipeListItem,
     AdminRecipesListResponse,
     AdminRecipeDetailResponse,
+    SendNotificationResponse,
 )
 from app.api.v1.schemas.common import MessageResponse
 
@@ -878,4 +880,105 @@ async def get_moderation_statistics(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch statistics"
+        )
+
+
+# =============================================================================
+# NOTIFICATIONS
+# =============================================================================
+
+
+@router.post(
+    "/notifications/send",
+    response_model=SendNotificationResponse,
+    summary="Send push notification",
+    description="Send a push notification to one user or broadcast to all users"
+)
+async def send_admin_notification(
+    request: SendNotificationRequest,
+    current_user: dict = Depends(get_admin_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """
+    Send a push notification to one user or all users.
+
+    - If **user_id** is provided: send only to that user's devices
+    - If **user_id** is None: broadcast to all users with active tokens
+
+    The notification bypasses user preference checks (admin override).
+    """
+    from app.services.push_notification_service import PushNotificationService, NotificationType
+
+    try:
+        service = PushNotificationService(supabase)
+
+        if request.user_id:
+            # Send to specific user
+            result = await service.send_notification(
+                user_id=request.user_id,
+                notification_type=NotificationType.FIRST_RECIPE_NUDGE,
+                title=request.title,
+                body=request.body,
+                data=request.data or {"type": "admin"},
+                check_preferences=False
+            )
+
+            logger.info(f"Admin {current_user['id']} sent notification to user {request.user_id}: {result}")
+
+            return SendNotificationResponse(
+                success=result,
+                message="Notification sent" if result else "No active tokens for user",
+                sent_count=1 if result else 0,
+                failed_count=0 if result else 1
+            )
+        else:
+            # Broadcast to all users with active tokens
+            token_result = supabase.table("push_tokens")\
+                .select("user_id")\
+                .eq("is_active", True)\
+                .execute()
+
+            user_ids = list(set(row["user_id"] for row in token_result.data))
+
+            if not user_ids:
+                return SendNotificationResponse(
+                    success=False,
+                    message="No users with active tokens found",
+                    sent_count=0,
+                    failed_count=0
+                )
+
+            sent, failed = 0, 0
+            for uid in user_ids:
+                try:
+                    success = await service.send_notification(
+                        user_id=uid,
+                        notification_type=NotificationType.FIRST_RECIPE_NUDGE,
+                        title=request.title,
+                        body=request.body,
+                        data=request.data or {"type": "admin_broadcast"},
+                        check_preferences=False
+                    )
+                    if success:
+                        sent += 1
+                    else:
+                        failed += 1
+                except Exception as e:
+                    logger.warning(f"Failed to send to user {uid}: {e}")
+                    failed += 1
+
+            logger.info(f"Admin {current_user['id']} broadcast notification: {sent} sent, {failed} failed")
+
+            return SendNotificationResponse(
+                success=sent > 0,
+                message=f"Broadcast complete: {sent} sent, {failed} failed",
+                sent_count=sent,
+                failed_count=failed
+            )
+
+    except Exception as e:
+        logger.error(f"Error sending admin notification: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send notification"
         )
