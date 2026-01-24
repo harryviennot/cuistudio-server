@@ -71,28 +71,9 @@ class UpdatePreferencesRequest(BaseModel):
     timezone: Optional[str] = Field(None, max_length=50, description="User timezone (e.g., 'America/New_York')")
 
 
-class TrackAppOpenRequest(BaseModel):
-    """Request to track app open for smart timing"""
-    hour: int = Field(
-        ...,
-        ge=0,
-        le=23,
-        description="Current hour in UTC (0-23)"
-    )
-
-
-class TrackAppOpenResponse(BaseModel):
-    """Response for app open tracking"""
-    success: bool
-
-
 class ActivityStatsResponse(BaseModel):
     """Response for user activity stats"""
     current_cooking_streak: int = Field(0, description="Current consecutive cooking days")
     longest_cooking_streak: int = Field(0, description="Longest ever cooking streak")
     last_cook_date: Optional[datetime] = Field(None, description="Last cooking session date")
-    total_app_opens: int = Field(0, description="Total app opens tracked")
-    preferred_notification_hour: Optional[int] = Field(
-        None,
-        description="Computed optimal notification hour (0-23 UTC)"
-    )
+    last_app_open_at: Optional[datetime] = Field(None, description="Last time user was active in the app")

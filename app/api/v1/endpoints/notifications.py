@@ -15,8 +15,6 @@ from app.api.v1.schemas.notifications import (
     UnregisterTokenRequest,
     NotificationPreferencesResponse,
     UpdatePreferencesRequest,
-    TrackAppOpenRequest,
-    TrackAppOpenResponse,
     ActivityStatsResponse,
 )
 
@@ -207,45 +205,6 @@ async def update_notification_preferences(
         )
 
 
-@router.post(
-    "/track-app-open",
-    response_model=TrackAppOpenResponse,
-    summary="Track app open",
-    description="Track app open for smart notification timing"
-)
-async def track_app_open(
-    request: TrackAppOpenRequest,
-    current_user: dict = Depends(get_current_user),
-    supabase: Client = Depends(get_supabase_admin_client)
-):
-    """
-    Track an app open event for the smart timing algorithm.
-
-    This should be called whenever the app is opened or foregrounded.
-    The hour parameter should be the current UTC hour (0-23).
-
-    The system uses this data to learn when the user typically opens
-    the app and sends notifications at optimal times.
-
-    Returns:
-    - **success**: Whether tracking succeeded
-    """
-    user_id = current_user["id"]
-
-    try:
-        # Call the database function to track app open
-        supabase.rpc("track_app_open", {
-            "p_user_id": user_id,
-            "p_hour": request.hour
-        }).execute()
-
-        return TrackAppOpenResponse(success=True)
-    except Exception as e:
-        logger.error(f"Error tracking app open: {str(e)}")
-        # Don't fail the request - tracking is not critical
-        return TrackAppOpenResponse(success=False)
-
-
 @router.get(
     "/activity-stats",
     response_model=ActivityStatsResponse,
@@ -263,8 +222,7 @@ async def get_activity_stats(
     - **current_cooking_streak**: Current consecutive cooking days
     - **longest_cooking_streak**: Longest ever cooking streak
     - **last_cook_date**: Date of last cooking session
-    - **total_app_opens**: Total tracked app opens
-    - **preferred_notification_hour**: Computed optimal notification hour
+    - **last_app_open_at**: Last time user was active in the app
     """
     user_id = current_user["id"]
 
@@ -280,8 +238,7 @@ async def get_activity_stats(
                 current_cooking_streak=stats.get("current_cooking_streak", 0),
                 longest_cooking_streak=stats.get("longest_cooking_streak", 0),
                 last_cook_date=stats.get("last_cook_date"),
-                total_app_opens=stats.get("total_app_opens", 0),
-                preferred_notification_hour=stats.get("preferred_notification_hour")
+                last_app_open_at=stats.get("last_app_open_at")
             )
         else:
             # No stats yet
@@ -289,8 +246,7 @@ async def get_activity_stats(
                 current_cooking_streak=0,
                 longest_cooking_streak=0,
                 last_cook_date=None,
-                total_app_opens=0,
-                preferred_notification_hour=None
+                last_app_open_at=None
             )
     except Exception as e:
         logger.error(f"Error fetching activity stats: {str(e)}")

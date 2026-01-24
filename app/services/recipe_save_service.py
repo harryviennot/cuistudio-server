@@ -4,6 +4,7 @@ Handles the unified save logic for all extraction types.
 This separates the "save" action from the "extract" action.
 """
 import logging
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from supabase import Client
 
@@ -85,6 +86,18 @@ class RecipeSaveService:
 
             # Mark as extracted for this user
             await self.user_recipe_repo.mark_as_extracted(user_id, recipe_id)
+
+            # Update user activity (passive tracking instead of dedicated app open calls)
+            try:
+                self.supabase.table("user_activity_stats")\
+                    .upsert({
+                        "user_id": user_id,
+                        "last_app_open_at": datetime.now(timezone.utc).isoformat()
+                    }, on_conflict="user_id")\
+                    .execute()
+            except Exception as activity_error:
+                # Don't fail the main request if activity tracking fails
+                logger.warning(f"Failed to update activity stats: {activity_error}")
 
             return {
                 "recipe_id": recipe_id,

@@ -823,6 +823,8 @@ async def mark_recipe_cooked(
     If rating is provided, it also updates the user's current rating for the recipe.
     Also updates cooking streak and sends milestone notifications.
     """
+    from datetime import datetime, timezone
+
     try:
         from app.services.push_notification_service import PushNotificationService
 
@@ -859,6 +861,18 @@ async def mark_recipe_cooked(
         except Exception as streak_error:
             # Don't fail the main request if streak tracking fails
             logger.warning(f"Failed to update cooking streak: {streak_error}")
+
+        # Update user activity (passive tracking instead of dedicated app open calls)
+        try:
+            supabase.table("user_activity_stats")\
+                .upsert({
+                    "user_id": current_user["id"],
+                    "last_app_open_at": datetime.now(timezone.utc).isoformat()
+                }, on_conflict="user_id")\
+                .execute()
+        except Exception as activity_error:
+            # Don't fail the main request if activity tracking fails
+            logger.warning(f"Failed to update activity stats: {activity_error}")
 
         return MessageResponse(message="Recipe marked as cooked")
 
