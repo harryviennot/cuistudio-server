@@ -148,6 +148,7 @@ class UserResponse(BaseModel):
     is_new_user: bool = False
     is_anonymous: bool = False
     unacknowledged_warnings: List[UserWarning] = []
+    has_registered_push_token: bool = False
 
 
 class AuthResponse(BaseModel):
@@ -266,6 +267,24 @@ class VerifyEmailChangeRequest(BaseModel):
             "example": {
                 "email": "newemail@example.com",
                 "token": "123456"
+            }
+        }
+    }
+
+
+class UpdateLanguageRequest(BaseModel):
+    """Update user's preferred language for notifications"""
+    language: str = Field(
+        ...,
+        pattern=r"^(en|fr)$",
+        examples=["en", "fr"],
+        description="Language code (en or fr)"
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "language": "fr"
             }
         }
     }

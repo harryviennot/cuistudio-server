@@ -22,6 +22,7 @@ from app.api.v1.schemas.admin import (
     UnsuspendUserRequest,
     UnbanUserRequest,
     DeleteUserRequest,
+    SendNotificationRequest,
     # Response schemas
     AdminMeResponse,
     ContentReportAdmin,
@@ -38,6 +39,7 @@ from app.api.v1.schemas.admin import (
     AdminRecipeListItem,
     AdminRecipesListResponse,
     AdminRecipeDetailResponse,
+    SendNotificationResponse,
 )
 from app.api.v1.schemas.common import MessageResponse
 
@@ -878,4 +880,131 @@ async def get_moderation_statistics(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch statistics"
+        )
+
+
+# =============================================================================
+# NOTIFICATIONS
+# =============================================================================
+
+
+def _get_localized_content(content, language: str) -> str:
+    """Get content for the specified language, falling back to English"""
+    if language == "fr":
+        return content.fr
+    return content.en
+
+
+@router.post(
+    "/notifications/send",
+    response_model=SendNotificationResponse,
+    summary="Send push notification",
+    description="Send a push notification to one user or broadcast to all users in their preferred language"
+)
+async def send_admin_notification(
+    request: SendNotificationRequest,
+    current_user: dict = Depends(get_admin_user),
+    supabase: Client = Depends(get_supabase_admin_client)
+):
+    """
+    Send a push notification to one user or all users.
+
+    - If **user_id** is provided: send only to that user's devices in their preferred language
+    - If **user_id** is None: broadcast to all users with active tokens, each in their preferred language
+
+    The notification bypasses user preference checks (admin override).
+    """
+    from app.services.push_notification_service import PushNotificationService, NotificationType
+
+    try:
+        service = PushNotificationService(supabase)
+
+        if request.user_id:
+            # Fetch user's preferred language
+            user_result = supabase.table("users")\
+                .select("preferred_language")\
+                .eq("id", request.user_id)\
+                .single()\
+                .execute()
+
+            language = user_result.data.get("preferred_language", "en") if user_result.data else "en"
+            title = _get_localized_content(request.title, language)
+            body = _get_localized_content(request.body, language)
+
+            # Send to specific user
+            result = await service.send_notification(
+                user_id=request.user_id,
+                notification_type=NotificationType.FIRST_RECIPE_NUDGE,
+                title=title,
+                body=body,
+                data=request.data or {"type": "admin"},
+                check_preferences=False
+            )
+
+            logger.info(f"Admin {current_user['id']} sent notification to user {request.user_id} (lang={language}): {result}")
+
+            return SendNotificationResponse(
+                success=result,
+                message="Notification sent" if result else "No active tokens for user",
+                sent_count=1 if result else 0,
+                failed_count=0 if result else 1
+            )
+        else:
+            # Broadcast to all users with active tokens, fetching their language preference
+            token_result = supabase.table("push_tokens")\
+                .select("user_id, users!inner(preferred_language)")\
+                .eq("is_active", True)\
+                .execute()
+
+            if not token_result.data:
+                return SendNotificationResponse(
+                    success=False,
+                    message="No users with active tokens found",
+                    sent_count=0,
+                    failed_count=0
+                )
+
+            # Deduplicate by user_id while preserving language info
+            user_languages = {}
+            for row in token_result.data:
+                uid = row["user_id"]
+                if uid not in user_languages:
+                    user_languages[uid] = row.get("users", {}).get("preferred_language", "en")
+
+            sent, failed = 0, 0
+            for uid, language in user_languages.items():
+                try:
+                    title = _get_localized_content(request.title, language)
+                    body = _get_localized_content(request.body, language)
+
+                    success = await service.send_notification(
+                        user_id=uid,
+                        notification_type=NotificationType.FIRST_RECIPE_NUDGE,
+                        title=title,
+                        body=body,
+                        data=request.data or {"type": "admin_broadcast"},
+                        check_preferences=False
+                    )
+                    if success:
+                        sent += 1
+                    else:
+                        failed += 1
+                except Exception as e:
+                    logger.warning(f"Failed to send to user {uid}: {e}")
+                    failed += 1
+
+            logger.info(f"Admin {current_user['id']} broadcast notification: {sent} sent, {failed} failed")
+
+            return SendNotificationResponse(
+                success=sent > 0,
+                message=f"Broadcast complete: {sent} sent, {failed} failed",
+                sent_count=sent,
+                failed_count=failed
+            )
+
+    except Exception as e:
+        logger.error(f"Error sending admin notification: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send notification"
         )

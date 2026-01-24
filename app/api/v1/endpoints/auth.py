@@ -22,6 +22,7 @@ from app.api.v1.schemas.auth import (
     LinkPhoneIdentityRequest,
     ChangeEmailRequest,
     VerifyEmailChangeRequest,
+    UpdateLanguageRequest,
     AuthResponse,
     UserResponse,
     UserWarning
@@ -1124,6 +1125,19 @@ async def get_me(
         # Non-critical - log and continue without warnings
         logger.warning(f"Failed to fetch user warnings: {e}")
 
+    # Check if user has ever registered a push token (for notification prompt logic)
+    has_push_token = False
+    try:
+        token_result = admin_client.table("push_tokens")\
+            .select("id")\
+            .eq("user_id", current_user["id"])\
+            .limit(1)\
+            .execute()
+        has_push_token = len(token_result.data) > 0
+    except Exception as e:
+        # Non-critical - log and continue
+        logger.warning(f"Failed to check push token history: {e}")
+
     return UserResponse(
         id=current_user["id"],
         email=current_user.get("email"),
@@ -1132,7 +1146,8 @@ async def get_me(
         user_metadata=current_user.get("user_metadata", {}),
         is_new_user=current_user.get("is_new_user", False),
         is_anonymous=current_user.get("is_anonymous", False),
-        unacknowledged_warnings=warnings
+        unacknowledged_warnings=warnings,
+        has_registered_push_token=has_push_token
     )
 
 
@@ -1598,6 +1613,87 @@ async def verify_email_change(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to verify email change. Please try again."
+        )
+
+
+# ============================================================================
+# USER PREFERENCES
+# ============================================================================
+
+@router.patch(
+    "/me/language",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update Preferred Language",
+    description="Updates the user's preferred language for notifications.",
+    responses={
+        200: {
+            "description": "Language updated successfully",
+            "content": {
+                "application/json": {
+                    "example": {"message": "Language preference updated to fr"}
+                }
+            }
+        },
+        400: {"description": "Invalid language code"},
+        401: {"description": "Not authenticated"},
+        500: {"description": "Server error"}
+    }
+)
+async def update_language(
+    request: UpdateLanguageRequest,
+    current_user: dict = Depends(get_current_user),
+    admin_client: Client = Depends(get_supabase_admin_client)
+):
+    """
+    ## Update Preferred Language
+
+    Updates the user's preferred language for push notifications and other
+    server-side localized content.
+
+    **Supported Languages:**
+    - `en` - English (default)
+    - `fr` - French
+
+    **Authentication:**
+    - Requires valid JWT access token in Authorization header
+    - Format: `Authorization: Bearer <access_token>`
+    """
+    try:
+        user_id = current_user["id"]
+        language = request.language
+
+        # Update the user's preferred language
+        result = admin_client.from_("users")\
+            .update({"preferred_language": language, "updated_at": "now()"})\
+            .eq("id", user_id)\
+            .execute()
+
+        if not result.data:
+            # User record might not exist yet, try to create it
+            insert_result = admin_client.from_("users")\
+                .insert({
+                    "id": user_id,
+                    "preferred_language": language
+                })\
+                .execute()
+
+            if not insert_result.data:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to update language preference"
+                )
+
+        logger.info(f"Updated language preference for user {user_id} to {language}")
+        return MessageResponse(message=f"Language preference updated to {language}")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Language update error for user {current_user['id']}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update language preference"
         )
 
 

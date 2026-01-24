@@ -54,6 +54,13 @@ async def lifespan(app: FastAPI):
         interval_hours=4
     )
 
+    # Start push notification scheduler
+    from app.core.notification_scheduler import start_notification_scheduler
+    notification_scheduler = start_notification_scheduler(
+        supabase_url=settings.SUPABASE_URL,
+        supabase_key=settings.SUPABASE_SECRET_KEY
+    )
+
     logger.info("Application startup complete")
 
     yield
@@ -66,6 +73,10 @@ async def lifespan(app: FastAPI):
     if cache_refresh_scheduler:
         cache_refresh_scheduler.shutdown(wait=False)
         logger.info("Cache refresh scheduler stopped")
+
+    if notification_scheduler:
+        notification_scheduler.shutdown(wait=False)
+        logger.info("Notification scheduler stopped")
 
     logger.info("Shutting down event broadcaster...")
     await shutdown_event_broadcaster()
@@ -92,10 +103,25 @@ def create_app() -> FastAPI:
         extraction_per_minute=settings.EXTRACTION_RATE_LIMIT_PER_MINUTE
     )
 
-    # CORS Middleware
+    # CORS Middleware - Development allows common localhost ports
+    if settings.is_production:
+        cors_origins = settings.cors_origins_list
+    else:
+        # In development, allow common localhost ports + configured origins
+        cors_origins = list(set([
+            "http://localhost:3000",
+            "http://localhost:3001",
+            "http://localhost:8080",
+            "http://localhost:8081",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:3001",
+            "http://127.0.0.1:8080",
+            "http://127.0.0.1:8081",
+        ] + settings.cors_origins_list))
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins_list,
+        allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

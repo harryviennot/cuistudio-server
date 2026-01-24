@@ -1,0 +1,31 @@
+{
+  "notifications": {
+    "first_recipe_nudge": {
+      "title": "Prêt à cuisiner quelque chose d'incroyable ?",
+      "body": "Ajoutez votre première recette et commencez votre aventure culinaire !"
+    },
+    "weekly_credits_refresh": {
+      "title": "Vos crédits sont prêts !",
+      "body": "Vous avez {credits} extractions gratuites cette semaine. Qu'allez-vous cuisiner ?"
+    },
+    "referral_activated": {
+      "title": "Vous avez gagné des crédits bonus !",
+      "body": "{referee_name} a rejoint Cuisto avec votre code. +{credits_earned} crédits !"
+    },
+    "cook_tonight": {
+      "title": "Qu'est-ce qu'on mange ce soir ?",
+      "body": "Et si vous prépariez {recipe_title} ce soir ?"
+    },
+    "cooking_streak": {
+      "title": "Série de cuisine{emoji}",
+      "body_30": "Légendaire ! {streak_days} jours de cuisine d'affilée !",
+      "body_14": "Incroyable ! {streak_days} jours de cuisine consécutifs !",
+      "body_7": "Une semaine entière ! {streak_days} jours de cuisine !",
+      "body_default": "{streak_days} jours de cuisine d'affilée ! Continuez comme ça !"
+    },
+    "miss_you": {
+      "title": "La cuisine vous attend !",
+      "body": "Vos recettes vous manquent. Revenez préparer quelque chose de délicieux !"
+    }
+  }
+}
