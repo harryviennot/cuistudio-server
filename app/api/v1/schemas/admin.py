@@ -96,14 +96,20 @@ class UnbanUserRequest(BaseModel):
     reason: str = Field(..., max_length=500, description="Reason for unban")
 
 
+class LocalizedContent(BaseModel):
+    """Localized notification content for multiple languages"""
+    en: str = Field(..., min_length=1, max_length=500, description="English content")
+    fr: str = Field(..., min_length=1, max_length=500, description="French content")
+
+
 class SendNotificationRequest(BaseModel):
-    """Request to send a push notification"""
+    """Request to send a push notification with localized content"""
     user_id: Optional[str] = Field(
         None,
         description="Target user ID. If None, broadcasts to all users with active tokens"
     )
-    title: str = Field(..., min_length=1, max_length=100, description="Notification title")
-    body: str = Field(..., min_length=1, max_length=500, description="Notification body")
+    title: LocalizedContent = Field(..., description="Notification title in all supported languages")
+    body: LocalizedContent = Field(..., description="Notification body in all supported languages")
     data: Optional[Dict[str, Any]] = Field(
         None,
         description="Optional payload data for deep linking"
