@@ -29,6 +29,11 @@ class RegisterTokenRequest(BaseModel):
         max_length=20,
         description="App version for compatibility tracking"
     )
+    language: Optional[str] = Field(
+        None,
+        pattern="^(en|fr)$",
+        description="User's preferred language for notifications"
+    )
 
 
 class RegisterTokenResponse(BaseModel):
