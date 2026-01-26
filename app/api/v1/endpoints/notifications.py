@@ -59,6 +59,18 @@ async def register_push_token(
             app_version=request.app_version
         )
 
+        # Update user's preferred language if provided
+        if request.language:
+            try:
+                supabase.table("users")\
+                    .update({"preferred_language": request.language})\
+                    .eq("id", user_id)\
+                    .execute()
+                logger.info(f"Updated language preference for user {user_id} to {request.language}")
+            except Exception as e:
+                # Non-critical: log but don't fail token registration
+                logger.warning(f"Failed to update language for user {user_id}: {e}")
+
         logger.info(f"Registered push token for user {user_id}")
         return RegisterTokenResponse(
             success=True,
